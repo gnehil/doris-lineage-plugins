@@ -13,7 +13,9 @@ import java.time.Instant;
 import java.time.ZoneOffset;
 import java.time.ZonedDateTime;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.function.Supplier;
 
@@ -55,61 +57,47 @@ public final class EventConverter {
             inputs.add(ol.newInputDatasetBuilder().namespace(namespace).name(name(source)).build());
         }
 
-        OpenLineage.ColumnLineageDatasetFacetFieldsBuilder fields =
-                ol.newColumnLineageDatasetFacetFieldsBuilder();
-        boolean anyField = false;
+        Map<String, List<OpenLineage.InputField>> fieldsByColumn = new LinkedHashMap<>();
         for (ColumnEdge edge : nullToEmpty(input.columns())) {
             if (edge == null || edge.kind() == Kind.CONSTANT) {
                 continue;
             }
-            List<OpenLineage.InputField> inputFields = new ArrayList<>();
+            List<OpenLineage.InputField> inputFields = fieldsByColumn.computeIfAbsent(edge.outputColumn(), ignored -> new ArrayList<>());
             for (ColumnRef source : nullToEmpty(edge.sources())) {
                 if (source == null || !identifiable(source.dataset()) || blank(source.column())) {
                     lineageComplete = false;
                     diagnostics.add(new Diagnostic(input.queryId(), edge.outputColumn(), "column source is unresolved"));
                     continue;
                 }
-                OpenLineage.InputFieldTransformationsBuilder transformation =
-                        ol.newInputFieldTransformationsBuilder().type(edge.kind().name());
-                if (!blank(edge.subtype())) {
-                    transformation.subtype(edge.subtype());
-                }
-                OpenLineage.InputFieldBuilder field = ol.newInputFieldBuilder()
-                        .namespace(namespace)
-                        .name(name(source.dataset()))
-                        .field(source.column())
-                        .transformations(List.of(transformation.build()));
-                inputFields.add(field.build());
+                inputFields.add(inputField(ol, namespace, source.dataset(), source.column(), edge.kind().name(), edge.subtype()));
             }
-            if (inputFields.isEmpty()) {
+        }
+        OpenLineage.ColumnLineageDatasetFacetFieldsBuilder fields = ol.newColumnLineageDatasetFacetFieldsBuilder();
+        boolean anyField = false;
+        for (Map.Entry<String, List<OpenLineage.InputField>> entry : fieldsByColumn.entrySet()) {
+            if (entry.getValue().isEmpty()) {
                 continue;
             }
-            fields.put(edge.outputColumn(), ol.newColumnLineageDatasetFacetFieldsAdditionalBuilder()
-                    .inputFields(inputFields)
+            fields.put(entry.getKey(), ol.newColumnLineageDatasetFacetFieldsAdditionalBuilder()
+                    .inputFields(entry.getValue())
                     .build());
             anyField = true;
         }
 
         List<OpenLineage.InputField> datasetLevel = new ArrayList<>();
         for (DatasetIndirect indirect : nullToEmpty(input.datasetIndirect())) {
-            OpenLineage.InputFieldTransformationsBuilder transformation =
-                    ol.newInputFieldTransformationsBuilder().type(Kind.INDIRECT.name());
-            if (!blank(indirect.subtype())) {
-                transformation.subtype(indirect.subtype());
+            if (indirect == null || blank(indirect.column())) {
+                lineageComplete = false;
+                diagnostics.add(new Diagnostic(input.queryId(), null, "dataset-level source column is unresolved"));
+                continue;
             }
-            datasetLevel.add(ol.newInputFieldBuilder()
-                    .namespace(namespace)
-                    .name(name(indirect.dataset()))
-                    .transformations(List.of(transformation.build()))
-                    .build());
+            datasetLevel.add(inputField(ol, namespace, indirect.dataset(), indirect.column(), Kind.INDIRECT.name(), indirect.subtype()));
         }
 
         OpenLineage.DatasetFacetsBuilder facets = ol.newDatasetFacetsBuilder();
         if (anyField || !datasetLevel.isEmpty()) {
-            OpenLineage.ColumnLineageDatasetFacetBuilder columnLineage = ol.newColumnLineageDatasetFacetBuilder();
-            if (anyField) {
-                columnLineage.fields(fields.build());
-            }
+            OpenLineage.ColumnLineageDatasetFacetBuilder columnLineage = ol.newColumnLineageDatasetFacetBuilder()
+                    .fields(fields.build());
             if (!datasetLevel.isEmpty()) {
                 columnLineage.dataset(datasetLevel);
             }
@@ -138,6 +126,25 @@ public final class EventConverter {
         String startEvent = OpenLineageClientUtils.toJson(event(ol, OpenLineage.RunEvent.EventType.START, start, run, job, inputs, output));
         String completeEvent = OpenLineageClientUtils.toJson(event(ol, OpenLineage.RunEvent.EventType.COMPLETE, complete, run, job, inputs, output));
         return new ConversionResult(List.of(startEvent, completeEvent), List.copyOf(diagnostics), lineageComplete, startTimeSource);
+    }
+
+    private static OpenLineage.InputField inputField(
+            OpenLineage ol,
+            String namespace,
+            DatasetId dataset,
+            String column,
+            String type,
+            String subtype) {
+        OpenLineage.InputFieldTransformationsBuilder transformation = ol.newInputFieldTransformationsBuilder().type(type);
+        if (!blank(subtype)) {
+            transformation.subtype(subtype);
+        }
+        return ol.newInputFieldBuilder()
+                .namespace(namespace)
+                .name(name(dataset))
+                .field(column)
+                .transformations(List.of(transformation.build()))
+                .build();
     }
 
     private static OpenLineage.RunEvent event(

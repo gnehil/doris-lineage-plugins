@@ -60,8 +60,54 @@ class EventConverterTest {
         assertTrue(start.at("/outputs/0/facets/columnLineage/fields/literal_only").isMissingNode());
         JsonNode datasetLevel = start.at("/outputs/0/facets/columnLineage/dataset");
         assertEquals("internal.sales.customers", datasetLevel.get(0).get("name").asText());
+        assertEquals("region", datasetLevel.get(0).get("field").asText());
         assertEquals("FILTER", datasetLevel.get(0).at("/transformations/0/subtype").asText());
-        assertTrue(datasetLevel.get(0).path("field").isMissingNode() || datasetLevel.get(0).path("field").isNull());
+        ColumnLineageSchema.assertValid(start.at("/outputs/0/facets/columnLineage"));
+    }
+
+    @Test
+    void keepsDirectAndIndirectInputsOnTheSameOutputColumn() throws Exception {
+        LineageInput input = new LineageInput(
+                QUERY_ID.toString(),
+                "warehouse-a",
+                SUMMARY,
+                List.of(ORDERS),
+                List.of(
+                        new ColumnEdge("amount", Kind.DIRECT, "IDENTITY", List.of(new ColumnRef(ORDERS, "amt"))),
+                        new ColumnEdge("amount", Kind.INDIRECT, "WINDOW", List.of(new ColumnRef(ORDERS, "order_id")))),
+                List.of(),
+                1_000L,
+                1L,
+                2_500L);
+        JsonNode start = JSON.readTree(new EventConverter(UUID::randomUUID).convert(input).events().get(0));
+        JsonNode inputs = start.at("/outputs/0/facets/columnLineage/fields/amount/inputFields");
+        assertEquals(2, inputs.size());
+        assertEquals("amt", inputs.get(0).get("field").asText());
+        assertEquals("DIRECT", inputs.get(0).at("/transformations/0/type").asText());
+        assertEquals("order_id", inputs.get(1).get("field").asText());
+        assertEquals("INDIRECT", inputs.get(1).at("/transformations/0/type").asText());
+        assertEquals("WINDOW", inputs.get(1).at("/transformations/0/subtype").asText());
+        ColumnLineageSchema.assertValid(start.at("/outputs/0/facets/columnLineage"));
+    }
+
+    @Test
+    void emitsEmptyFieldsWhenOnlyDatasetLevelLineageExists() throws Exception {
+        LineageInput input = new LineageInput(
+                QUERY_ID.toString(),
+                "warehouse-a",
+                SUMMARY,
+                List.of(CUSTOMERS),
+                List.of(),
+                List.of(new DatasetIndirect(CUSTOMERS, "region", "FILTER")),
+                1_000L,
+                1L,
+                2_500L);
+        JsonNode facet = JSON.readTree(new EventConverter(UUID::randomUUID).convert(input).events().get(0))
+                .at("/outputs/0/facets/columnLineage");
+        assertTrue(facet.get("fields").isObject());
+        assertEquals(0, facet.get("fields").size());
+        assertEquals("region", facet.at("/dataset/0/field").asText());
+        ColumnLineageSchema.assertValid(facet);
     }
 
     @Test
@@ -145,7 +191,7 @@ class EventConverterTest {
                                 new ColumnRef(ORDERS, "qty"))),
                         new ColumnEdge("total", Kind.INDIRECT, "AGGREGATION", List.of(new ColumnRef(ORDERS, "amt"))),
                         new ColumnEdge("literal_only", Kind.CONSTANT, null, List.of())),
-                List.of(new DatasetIndirect(CUSTOMERS, "FILTER")),
+                List.of(new DatasetIndirect(CUSTOMERS, "region", "FILTER")),
                 start,
                 duration,
                 2_500L);

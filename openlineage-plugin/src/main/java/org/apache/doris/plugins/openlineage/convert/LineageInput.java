@@ -31,6 +31,6 @@ public record LineageInput(
     public record ColumnEdge(String outputColumn, Kind kind, String subtype, List<ColumnRef> sources) {
     }
 
-    public record DatasetIndirect(DatasetId dataset, String subtype) {
+    public record DatasetIndirect(DatasetId dataset, String column, String subtype) {
     }
 }
