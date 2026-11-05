@@ -163,6 +163,41 @@ class EventConverterTest {
     }
 
     @Test
+    void marksMissingSourcesIncomplete() {
+        EventConverter converter = new EventConverter(UUID::randomUUID);
+        for (List<ColumnRef> sources : new List[] {List.of(), null}) {
+            LineageInput input = new LineageInput(
+                    QUERY_ID.toString(),
+                    "warehouse-a",
+                    SUMMARY,
+                    List.of(ORDERS),
+                    List.of(new ColumnEdge("amount", Kind.DIRECT, null, sources)),
+                    List.of(),
+                    1_000L,
+                    1L,
+                    9_000L);
+            EventConverter.ConversionResult result = converter.convert(input);
+            assertFalse(result.lineageComplete());
+            assertEquals(QUERY_ID.toString(), result.diagnostics().get(0).queryId());
+            assertEquals("amount", result.diagnostics().get(0).targetColumn());
+            assertEquals("column source is unresolved", result.diagnostics().get(0).reason());
+        }
+        LineageInput constantOnly = new LineageInput(
+                QUERY_ID.toString(),
+                "warehouse-a",
+                SUMMARY,
+                List.of(ORDERS),
+                List.of(new ColumnEdge("literal_only", Kind.CONSTANT, null, List.of())),
+                List.of(),
+                1_000L,
+                1L,
+                9_000L);
+        EventConverter.ConversionResult constants = converter.convert(constantOnly);
+        assertTrue(constants.lineageComplete());
+        assertTrue(constants.diagnostics().isEmpty());
+    }
+
+    @Test
     void doesNotSendWhenTheOutputIdentityIsMissing() {
         LineageInput input = sample(QUERY_ID.toString(), 1_000L, 1L);
         LineageInput broken = new LineageInput(

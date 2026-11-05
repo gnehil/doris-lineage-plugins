@@ -62,8 +62,13 @@ public final class EventConverter {
             if (edge == null || edge.kind() == Kind.CONSTANT) {
                 continue;
             }
+            if (edge.sources() == null || edge.sources().isEmpty()) {
+                lineageComplete = false;
+                diagnostics.add(new Diagnostic(input.queryId(), edge.outputColumn(), "column source is unresolved"));
+                continue;
+            }
             List<OpenLineage.InputField> inputFields = fieldsByColumn.computeIfAbsent(edge.outputColumn(), ignored -> new ArrayList<>());
-            for (ColumnRef source : nullToEmpty(edge.sources())) {
+            for (ColumnRef source : edge.sources()) {
                 if (source == null || !identifiable(source.dataset()) || blank(source.column())) {
                     lineageComplete = false;
                     diagnostics.add(new Diagnostic(input.queryId(), edge.outputColumn(), "column source is unresolved"));
