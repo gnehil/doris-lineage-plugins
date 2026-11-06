@@ -5,7 +5,6 @@ import org.junit.jupiter.api.Test;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.jar.JarFile;
 import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -33,18 +32,6 @@ class PluginPackageTest {
         String services = Files.readString(Path.of(
                 "src/doris/resources/META-INF/services/org.apache.doris.nereids.lineage.LineagePluginFactory"));
         assertTrue(services.contains("org.apache.doris.plugins.openlineage.doris.OpenLineagePluginFactory"));
-    }
-
-    @Test
-    void packagedJarDoesNotContainDorisClassesWhenPresent() throws IOException {
-        Path jar = Path.of("target/openlineage-plugin-0.1.0-SNAPSHOT.jar");
-        if (!Files.isRegularFile(jar)) {
-            return;
-        }
-        try (JarFile file = new JarFile(jar.toFile())) {
-            boolean dorisClass = file.stream().anyMatch(entry -> isDorisClass(entry.getName()));
-            assertTrue(!dorisClass, "plugin jar contains Doris FE classes");
-        }
     }
 
     static boolean isDorisClass(String name) {

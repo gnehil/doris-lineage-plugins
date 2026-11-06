@@ -29,10 +29,9 @@ public final class DorisLineageAdapter {
         List<DatasetId> inputs = new ArrayList<>();
         if (info.getTableLineageSet() != null) {
             for (TableIf table : info.getTableLineageSet()) {
-                DatasetId id = datasetId(table);
-                if (id != null && !id.equals(output)) {
-                    inputs.add(id);
-                }
+                // Null marks a source Doris named but whose catalog/database could not be resolved.
+                // A table that is both read and written stays in inputs.
+                inputs.add(datasetId(table));
             }
         }
         List<ColumnEdge> columns = new ArrayList<>();
@@ -59,8 +58,7 @@ public final class DorisLineageAdapter {
             if (byType == null) {
                 return;
             }
-            byType.asMap().forEach((type, expressions) ->
-                    columns.add(edge(output, Kind.DIRECT, type == null ? null : type.name(), expressions)));
+            byType.asMap().forEach((type, expressions) -> addEdge(columns, edge(output, Kind.DIRECT, type == null ? null : type.name(), expressions)));
         });
     }
 
@@ -72,22 +70,37 @@ public final class DorisLineageAdapter {
             if (byType == null) {
                 return;
             }
-            byType.asMap().forEach((type, expressions) ->
-                    columns.add(edge(output, Kind.INDIRECT, type == null ? null : type.name(), expressions)));
+            byType.asMap().forEach((type, expressions) -> addEdge(columns, edge(output, Kind.INDIRECT, type == null ? null : type.name(), expressions)));
         });
+    }
+
+    private static void addEdge(List<ColumnEdge> columns, ColumnEdge edge) {
+        if (edge != null) {
+            columns.add(edge);
+        }
+    }
+
+    private static List<ColumnRef> sourceRefs(Expression expression) {
+        List<ColumnRef> sources = new ArrayList<>();
+        if (expression == null || expression.getInputSlots() == null) {
+            return sources;
+        }
+        for (Slot slot : expression.getInputSlots()) {
+            sources.add(new ColumnRef(datasetId(tableOf(slot)), columnName(slot)));
+        }
+        return sources;
     }
 
     private static ColumnEdge edge(SlotReference output, Kind kind, String subtype, Iterable<Expression> expressions) {
         List<ColumnRef> sources = new ArrayList<>();
         if (expressions != null) {
             for (Expression expression : expressions) {
-                if (expression == null || expression.getInputSlots() == null) {
-                    continue;
-                }
-                for (Slot slot : expression.getInputSlots()) {
-                    sources.add(new ColumnRef(datasetId(tableOf(slot)), columnName(slot)));
-                }
+                sources.addAll(sourceRefs(expression));
             }
+        }
+        if (sources.isEmpty()) {
+            // Doris records literal projections as TRANSFORMATION with no input slots. That is a constant, not a failure.
+            return null;
         }
         return new ColumnEdge(columnName(output), kind, subtype, sources);
     }
@@ -99,12 +112,12 @@ public final class DorisLineageAdapter {
         }
         info.getDatasetIndirectLineageMap().forEach((type, expression) -> {
             String subtype = type == null ? null : type.name();
-            if (expression == null || expression.getInputSlots() == null || expression.getInputSlots().isEmpty()) {
-                indirect.add(new DatasetIndirect(null, null, subtype));
+            List<ColumnRef> sources = sourceRefs(expression);
+            if (sources.isEmpty()) {
                 return;
             }
-            for (Slot slot : expression.getInputSlots()) {
-                indirect.add(new DatasetIndirect(datasetId(tableOf(slot)), columnName(slot), subtype));
+            for (ColumnRef source : sources) {
+                indirect.add(new DatasetIndirect(source.dataset(), source.column(), subtype));
             }
         });
         return indirect;

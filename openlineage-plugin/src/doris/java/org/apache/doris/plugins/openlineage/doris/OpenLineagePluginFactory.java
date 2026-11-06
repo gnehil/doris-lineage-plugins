@@ -17,8 +17,7 @@ public final class OpenLineagePluginFactory implements LineagePluginFactory {
 
     @Override
     public LineagePlugin create(PluginContext context) {
-        OpenLineageLineagePlugin plugin = new OpenLineageLineagePlugin();
-        plugin.initialize(context);
-        return plugin;
+        // Doris calls initialize(context) after create(context). Initializing here would leak the first client.
+        return create();
     }
 }
