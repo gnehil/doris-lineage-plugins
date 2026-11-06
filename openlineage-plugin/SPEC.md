@@ -17,7 +17,7 @@ implements: [goal-and-requirements]
 - `initialize` 读取并校验 `{plugin.path}/openlineage.yml`，创建可复用的 HTTP 客户端。配置非法则插件加载失败。不读进程工作目录，也不把环境变量当作第二配置源。字段契约见「配置」。配置只在启动时读取，变更后须重启 FE。
 - `eventFilter` 只读线程安全的本地状态。它在 DML 查询线程上调用，不读文件、不探测接收端、不等待锁。
 - 把直接依赖映射为 `DIRECT`，间接依赖映射为 `INDIRECT`。只有 `LineageInfo` 已经给出子类型时才填写子类型。映射与降级见下节。事件由 `openlineage-java` 1.27.0 生成，其 `schemaURL` 固定为 OpenLineage `2-0-2`。升级客户端前，发出的事件仍必须使用该 schemaURL。
-- 通过 OpenLineage Java HTTP 客户端发送，并关闭其自动重试。先发 `START`，成功后再发 `COMPLETE`。不手写一套协议。事件模式见 `architecture`。
+- 先发 `START`，成功后再发 `COMPLETE`。每次尝试只发一次 HTTP，不跟随重定向，也不使用客户端自动重试。发送次数、预算和丢弃只按 `architecture` 计数。事件模式见 `architecture`。
 
 ## 配置
 
