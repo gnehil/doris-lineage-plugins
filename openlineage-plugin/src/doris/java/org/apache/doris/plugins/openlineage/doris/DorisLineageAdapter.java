@@ -1,5 +1,6 @@
 package org.apache.doris.plugins.openlineage.doris;
 
+import org.apache.doris.catalog.Column;
 import org.apache.doris.catalog.TableIf;
 import org.apache.doris.nereids.lineage.LineageContext;
 import org.apache.doris.nereids.lineage.LineageInfo;
@@ -8,6 +9,7 @@ import org.apache.doris.nereids.trees.expressions.Slot;
 import org.apache.doris.nereids.trees.expressions.SlotReference;
 import org.apache.doris.plugins.openlineage.convert.DorisEventTimes;
 import org.apache.doris.plugins.openlineage.convert.LineageInput;
+import org.apache.doris.plugins.openlineage.convert.SourceIdentity;
 import org.apache.doris.plugins.openlineage.convert.LineageInput.ColumnEdge;
 import org.apache.doris.plugins.openlineage.convert.LineageInput.ColumnRef;
 import org.apache.doris.plugins.openlineage.convert.LineageInput.DatasetId;
@@ -87,7 +89,7 @@ public final class DorisLineageAdapter {
             return sources;
         }
         for (Slot slot : expression.getInputSlots()) {
-            sources.add(new ColumnRef(datasetId(tableOf(slot)), columnName(slot)));
+            sources.add(columnRef(slot));
         }
         return sources;
     }
@@ -124,14 +126,33 @@ public final class DorisLineageAdapter {
         return indirect;
     }
 
-    private static TableIf tableOf(Slot slot) {
+    private static ColumnRef columnRef(Slot slot) {
         if (!(slot instanceof SlotReference reference)) {
+            return new ColumnRef(null, columnName(slot));
+        }
+        SourceIdentity.Choice choice = SourceIdentity.choose(
+                qualifiers(reference.getOriginalTable().orElse(null)),
+                columnOf(reference.getOriginalColumn().orElse(null)),
+                qualifiers(reference.getOneLevelTable().orElse(null)),
+                columnName(slot));
+        DatasetId dataset = choice.catalog() == null ? null : new DatasetId(choice.catalog(), choice.database(), choice.table());
+        return new ColumnRef(dataset, choice.column());
+    }
+
+    private static SourceIdentity.Qualifiers qualifiers(TableIf table) {
+        DatasetId id = datasetId(table);
+        return id == null ? null : new SourceIdentity.Qualifiers(id.catalog(), id.database(), id.table());
+    }
+
+    private static String columnOf(Column column) {
+        if (column == null) {
             return null;
         }
-        if (reference.getOneLevelTable().isPresent()) {
-            return reference.getOneLevelTable().get();
+        try {
+            return column.getName();
+        } catch (RuntimeException e) {
+            return null;
         }
-        return reference.getOriginalTable().orElse(null);
     }
 
     private static DatasetId datasetId(TableIf table) {
