@@ -40,6 +40,6 @@ implements: [goal-and-requirements]
 
 ## 边界
 
-允许依赖：Doris `fe-core` 与 `fe-extension-spi`（`provided`，不打入插件包）、插件自带的 OpenLineage Java 客户端及其 HTTP 运行库。
+允许依赖：Doris `fe-core` 与 `fe-extension-spi`（`provided`，不打入插件包）、插件自带的 OpenLineage Java 客户端及其 HTTP 运行库。只有 `src/doris` 里的适配器可以 import Doris 类型，并且只在 `-Ddoris.fe.lib` 指向 FE lib 时编译。默认契约测试不依赖 FE。
 
 禁止：解析 SQL；连接 FE 或任何 Doris 节点；写目录、消息队列、Atlas 或 DataHub 专用 API；依赖本仓库未来的同级模块；在 `exec` 之外保留待发送事件；在 `eventFilter` 中做 I/O。
