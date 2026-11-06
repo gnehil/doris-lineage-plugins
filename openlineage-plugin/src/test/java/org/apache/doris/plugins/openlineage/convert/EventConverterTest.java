@@ -136,6 +136,20 @@ class EventConverterTest {
     }
 
     @Test
+    void treatsDorisTimestampAsQueryEnd() throws Exception {
+        DorisEventTimes.Window window = DorisEventTimes.from(12_000_010L, 10_000L);
+        assertEquals(11_990_010L, window.startMs());
+        assertEquals(10_000L, window.durationMs());
+        EventConverter.ConversionResult result = new EventConverter(UUID::randomUUID).convert(sample(
+                QUERY_ID.toString(), window.startMs(), window.durationMs()));
+        JsonNode start = JSON.readTree(result.events().get(0));
+        JsonNode complete = JSON.readTree(result.events().get(1));
+        assertEquals(Instant.ofEpochMilli(11_990_010L), Instant.parse(start.get("eventTime").asText()));
+        assertEquals(Instant.ofEpochMilli(12_000_010L), Instant.parse(complete.get("eventTime").asText()));
+        assertEquals(new DorisEventTimes.Window(null, null), DorisEventTimes.from(DorisEventTimes.UNKNOWN, 10L));
+    }
+
+    @Test
     void fallsBackWhenDurationIsNegative() {
         EventConverter.ConversionResult result = new EventConverter(UUID::randomUUID).convert(sample(QUERY_ID.toString(), 5_000L, -1L));
         assertEquals("receive_time", result.startTimeSource());

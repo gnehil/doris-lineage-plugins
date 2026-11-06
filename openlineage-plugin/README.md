@@ -20,7 +20,7 @@ mvn -Ddoris.fe.lib=/path/to/fe/lib package
 
 ## 安装
 
-把生成的 jar 放到一个独立插件目录，并在同目录放 `openlineage.yml`：
+Doris 只扫描 `${plugin_dir}/lineage` 的直接子目录。把 jar 和 `openlineage.yml` 都放在 `${plugin_dir}/lineage/openlineage/`：
 
 ```yaml
 url: http://marquez:5000/api/v1/lineage

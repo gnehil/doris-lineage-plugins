@@ -75,7 +75,7 @@ Run ID：Query ID 已是 UUID 时直接使用。否则用 UUIDv5，输入是无�
 
 `START` 在预算内仍未拿到 2xx：丢弃，不发 `COMPLETE`。`START` 已成功而 `COMPLETE` 失败：只重试 `COMPLETE`，不重发 `START`。
 
-`eventTime`：4.0.6 的 `LineageContext` 若同时给出查询开始时间和耗时，`START` 用开始时间，`COMPLETE` 用开始时间加耗时。耗时为零可以。缺任一字段，或耗时为负，则两条都用插件收到 `LineageInfo` 的时刻，并记录诊断 `start_time_source=receive_time`，标明 `START` 不是真实开始。两条事件不混用两套时间。公开文档能读到的 getter 表在截断前没有列出这两个字段，因此“有则用”取决于 4.0.6 API，不把字段名写成已核对。
+`eventTime`：Doris 4.0.6 的 `timestampMs` 是血缘事件生成时刻，也就是查询结束时刻；`durationMs` 是查询耗时。两者都有效且耗时不为负时，`START` 用 `timestampMs - durationMs`，`COMPLETE` 用 `timestampMs`。耗时为零可以，两条时间相同。缺任一字段、耗时为负，或相减溢出，则两条都用插件收到 `LineageInfo` 的时刻，并记录诊断 `start_time_source=receive_time`。两条事件不混用两套时间。
 
 ## 构建
 

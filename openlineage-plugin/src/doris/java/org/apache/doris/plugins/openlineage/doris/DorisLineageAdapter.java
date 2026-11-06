@@ -6,6 +6,7 @@ import org.apache.doris.nereids.lineage.LineageInfo;
 import org.apache.doris.nereids.trees.expressions.Expression;
 import org.apache.doris.nereids.trees.expressions.Slot;
 import org.apache.doris.nereids.trees.expressions.SlotReference;
+import org.apache.doris.plugins.openlineage.convert.DorisEventTimes;
 import org.apache.doris.plugins.openlineage.convert.LineageInput;
 import org.apache.doris.plugins.openlineage.convert.LineageInput.ColumnEdge;
 import org.apache.doris.plugins.openlineage.convert.LineageInput.ColumnRef;
@@ -45,8 +46,8 @@ public final class DorisLineageAdapter {
                 inputs,
                 columns,
                 datasetIndirect,
-                startTime(context),
-                duration(context),
+                eventTimes(context).startMs(),
+                eventTimes(context).durationMs(),
                 receivedAtMs);
     }
 
@@ -163,18 +164,11 @@ public final class DorisLineageAdapter {
         }
     }
 
-    private static Long startTime(LineageContext context) {
-        if (context == null || context.getTimestampMs() == LineageContext.UNKNOWN_TIMESTAMP_MS) {
-            return null;
+    private static DorisEventTimes.Window eventTimes(LineageContext context) {
+        if (context == null) {
+            return new DorisEventTimes.Window(null, null);
         }
-        return context.getTimestampMs();
-    }
-
-    private static Long duration(LineageContext context) {
-        if (context == null || context.getDurationMs() == LineageContext.UNKNOWN_DURATION_MS) {
-            return null;
-        }
-        return context.getDurationMs();
+        return DorisEventTimes.from(context.getTimestampMs(), context.getDurationMs());
     }
 
     private static boolean blank(String value) {
