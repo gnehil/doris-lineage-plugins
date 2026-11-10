@@ -1,9 +1,12 @@
 package org.apache.doris.plugins.openlineage.emit;
 
+import org.apache.hc.client5.http.DnsResolver;
 import org.apache.hc.client5.http.classic.methods.HttpPost;
 import org.apache.hc.client5.http.config.RequestConfig;
 import org.apache.hc.client5.http.impl.classic.CloseableHttpClient;
+import org.apache.hc.client5.http.impl.classic.HttpClientBuilder;
 import org.apache.hc.client5.http.impl.classic.HttpClients;
+import org.apache.hc.client5.http.impl.io.PoolingHttpClientConnectionManagerBuilder;
 import org.apache.hc.core5.http.ClassicHttpResponse;
 import org.apache.hc.core5.http.ContentType;
 import org.apache.hc.core5.http.io.entity.ByteArrayEntity;
@@ -22,8 +25,10 @@ import java.util.Map;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.SynchronousQueue;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
@@ -32,19 +37,28 @@ import java.util.concurrent.TimeoutException;
  */
 public final class LineageHttpPoster implements HttpPoster, AutoCloseable {
     private final CloseableHttpClient client;
-    private final ExecutorService attempts;
+    private final ThreadPoolExecutor attempts;
 
     public LineageHttpPoster(Duration connectTimeout) {
-        this.attempts = Executors.newCachedThreadPool(task -> {
+        this(connectTimeout, null);
+    }
+
+    LineageHttpPoster(Duration connectTimeout, DnsResolver dnsResolver) {
+        this.attempts = new ThreadPoolExecutor(1, 1, 0, TimeUnit.MILLISECONDS, new SynchronousQueue<>(), task -> {
             Thread thread = new Thread(task, "openlineage-http");
             thread.setDaemon(true);
             return thread;
-        });
-        this.client = HttpClients.custom()
+        }, new ThreadPoolExecutor.AbortPolicy());
+        HttpClientBuilder builder = HttpClients.custom()
                 .disableAutomaticRetries()
                 .disableRedirectHandling()
-                .setDefaultRequestConfig(requestConfig(connectTimeout))
-                .build();
+                .setDefaultRequestConfig(requestConfig(connectTimeout));
+        if (dnsResolver != null) {
+            builder.setConnectionManager(PoolingHttpClientConnectionManagerBuilder.create()
+                    .setDnsResolver(dnsResolver)
+                    .build());
+        }
+        this.client = builder.build();
     }
 
     @Override
@@ -53,7 +67,12 @@ public final class LineageHttpPoster implements HttpPoster, AutoCloseable {
         request.setConfig(requestConfig(timeout));
         request.setEntity(new ByteArrayEntity(body, ContentType.APPLICATION_JSON));
         headers.forEach(request::setHeader);
-        Future<PostResult> exchange = attempts.submit(() -> execute(request));
+        Future<PostResult> exchange;
+        try {
+            exchange = attempts.submit(() -> execute(request));
+        } catch (RejectedExecutionException e) {
+            return PostResult.failure("timeout");
+        }
         try {
             return exchange.get(Math.max(1, timeout.toMillis()), TimeUnit.MILLISECONDS);
         } catch (TimeoutException e) {
@@ -90,6 +109,10 @@ public final class LineageHttpPoster implements HttpPoster, AutoCloseable {
 
     CloseableHttpClient client() {
         return client;
+    }
+
+    int inFlight() {
+        return attempts.getActiveCount();
     }
 
     static PostResult classify(Throwable error) {

@@ -1,5 +1,6 @@
 package org.apache.doris.plugins.openlineage.emit;
 
+import org.apache.hc.client5.http.DnsResolver;
 import org.apache.hc.client5.http.classic.methods.HttpGet;
 import org.junit.jupiter.api.Test;
 
@@ -8,6 +9,7 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.ConnectException;
 import java.net.InetAddress;
+import java.net.UnknownHostException;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.URI;
@@ -87,6 +89,34 @@ class LineageHttpPosterTest {
             PostResult result = poster.post(URI.create("http://does-not-exist.invalid/api/v1/lineage"),
                     "{}".getBytes(), Map.of(), Duration.ofSeconds(5));
             assertEquals("dns", result.errorType());
+        }
+    }
+
+    @Test
+    void blockedDnsDoesNotAccumulateAttempts() throws Exception {
+        DnsResolver blocked = new DnsResolver() {
+            @Override
+            public InetAddress[] resolve(String host) throws UnknownHostException {
+                try {
+                    Thread.sleep(30_000);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+                throw new UnknownHostException(host);
+            }
+
+            @Override
+            public String resolveCanonicalHostname(String host) {
+                return host;
+            }
+        };
+        try (LineageHttpPoster poster = new LineageHttpPoster(Duration.ofMillis(50), blocked)) {
+            for (int i = 0; i < 8; i++) {
+                PostResult result = poster.post(URI.create("http://blocked.invalid/api/v1/lineage"),
+                        "{}".getBytes(), Map.of(), Duration.ofMillis(50));
+                assertEquals("timeout", result.errorType());
+            }
+            assertTrue(poster.inFlight() <= 1, "inFlight=" + poster.inFlight());
         }
     }
 
