@@ -34,7 +34,7 @@ implements: [goal-and-requirements]
 
 `LineageInfo` 给出了依赖，但来源列无法解析：不凭空补边。记录转换诊断，至少包含 `query_id`、目标列和原因。这种输出可以发送已解析的边，但诊断必须标明转换不完整，不能与完整成功混在一起。
 
-数据集级间接依赖也要带来源列。`columnLineage` 使用 facet `1-2-0`，其中每个 `InputField` 都必须有 `field`。发出该 facet 时 `fields` 必须存在，没有输出列边时为空对象。同一输出列上的多种依赖合并进同一个 `fields` 项，不互相覆盖。经视图读取时，列级引用用原始表和原始列，不用视图本身，以便和 `tableLineageSet` 里的输入表一致。
+数据集级间接依赖也要带来源列。`columnLineage` 使用 facet `1-2-0`，其中每个 `InputField` 都必须有 `field`。发出该 facet 时 `fields` 必须存在，没有输出列边时为空对象。同一输出列上的多种依赖合并进同一个 `fields` 项，不互相覆盖。经视图读取时，列级引用用原始表和原始列，不用视图本身，以便和 `tableLineageSet` 里的输入表一致。输入和输出都带 `schema.fields`，名字覆盖列级边用到的列。没有列类型时类型记为 `STRING`，只为了让 Marquez 0.50.0 能建字段记录。
 
 数据集身份无法确定时不发送事件，并记录同一类诊断。
 

@@ -83,10 +83,44 @@ class LineageHttpPosterTest {
 
     @Test
     void unresolvedHostIsDns() throws Exception {
-        try (LineageHttpPoster poster = new LineageHttpPoster(Duration.ofMillis(800))) {
+        try (LineageHttpPoster poster = new LineageHttpPoster(Duration.ofSeconds(5))) {
             PostResult result = poster.post(URI.create("http://does-not-exist.invalid/api/v1/lineage"),
-                    "{}".getBytes(), Map.of(), Duration.ofMillis(800));
+                    "{}".getBytes(), Map.of(), Duration.ofSeconds(5));
             assertEquals("dns", result.errorType());
+        }
+    }
+
+    @Test
+    void slowDripCannotExceedTheAttemptDeadline() throws Exception {
+        try (ServerSocket server = new ServerSocket(0, 1, InetAddress.getByName("127.0.0.1"))) {
+            Thread drip = new Thread(() -> {
+                try (Socket socket = server.accept()) {
+                    readHeaders(socket.getInputStream());
+                    OutputStream out = socket.getOutputStream();
+                    out.write("HTTP/1.1 200 OK\r\nContent-Length: 20\r\n\r\n".getBytes());
+                    out.flush();
+                    for (int i = 0; i < 20; i++) {
+                        out.write('x');
+                        out.flush();
+                        Thread.sleep(90);
+                    }
+                } catch (Exception ignored) {
+                    // Client cancellation closes the socket.
+                }
+            });
+            drip.start();
+            try (LineageHttpPoster poster = new LineageHttpPoster(Duration.ofMillis(300))) {
+                long started = System.nanoTime();
+                PostResult result = poster.post(
+                        URI.create("http://127.0.0.1:" + server.getLocalPort() + "/api/v1/lineage"),
+                        "{}".getBytes(),
+                        Map.of(),
+                        Duration.ofMillis(300));
+                long elapsedMs = (System.nanoTime() - started) / 1_000_000;
+                assertEquals("timeout", result.errorType());
+                assertTrue(elapsedMs < 700, "slow response exceeded the attempt deadline, elapsedMs=" + elapsedMs);
+            }
+            drip.join(1_000);
         }
     }
 

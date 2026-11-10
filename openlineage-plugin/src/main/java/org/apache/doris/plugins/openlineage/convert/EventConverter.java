@@ -14,8 +14,10 @@ import java.time.ZoneOffset;
 import java.time.ZonedDateTime;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.function.Supplier;
 
@@ -52,11 +54,7 @@ public final class EventConverter {
         String outputName = name(input.output());
         boolean lineageComplete = true;
         OpenLineage ol = new OpenLineage(PRODUCER);
-        List<OpenLineage.InputDataset> inputs = new ArrayList<>();
-        for (DatasetId source : nullToEmpty(input.inputs())) {
-            inputs.add(ol.newInputDatasetBuilder().namespace(namespace).name(name(source)).build());
-        }
-
+        Map<String, Set<String>> inputColumns = new LinkedHashMap<>();
         Map<String, List<OpenLineage.InputField>> fieldsByColumn = new LinkedHashMap<>();
         for (ColumnEdge edge : nullToEmpty(input.columns())) {
             if (edge == null || edge.kind() == Kind.CONSTANT) {
@@ -75,6 +73,7 @@ public final class EventConverter {
                     continue;
                 }
                 inputFields.add(inputField(ol, namespace, source.dataset(), source.column(), edge.kind().name(), edge.subtype()));
+                inputColumns.computeIfAbsent(name(source.dataset()), ignored -> new LinkedHashSet<>()).add(source.column());
             }
         }
         OpenLineage.ColumnLineageDatasetFacetFieldsBuilder fields = ol.newColumnLineageDatasetFacetFieldsBuilder();
@@ -97,9 +96,16 @@ public final class EventConverter {
                 continue;
             }
             datasetLevel.add(inputField(ol, namespace, indirect.dataset(), indirect.column(), Kind.INDIRECT.name(), indirect.subtype()));
+            inputColumns.computeIfAbsent(name(indirect.dataset()), ignored -> new LinkedHashSet<>()).add(indirect.column());
         }
 
-        OpenLineage.DatasetFacetsBuilder facets = ol.newDatasetFacetsBuilder();
+        Set<String> outputColumns = new LinkedHashSet<>();
+        for (Map.Entry<String, List<OpenLineage.InputField>> entry : fieldsByColumn.entrySet()) {
+            if (!entry.getValue().isEmpty() && !blank(entry.getKey())) {
+                outputColumns.add(entry.getKey());
+            }
+        }
+        OpenLineage.DatasetFacetsBuilder facets = ol.newDatasetFacetsBuilder().schema(schema(ol, outputColumns));
         if (anyField || !datasetLevel.isEmpty()) {
             OpenLineage.ColumnLineageDatasetFacetBuilder columnLineage = ol.newColumnLineageDatasetFacetBuilder()
                     .fields(fields.build());
@@ -107,6 +113,18 @@ public final class EventConverter {
                 columnLineage.dataset(datasetLevel);
             }
             facets.columnLineage(columnLineage.build());
+        }
+
+        List<OpenLineage.InputDataset> inputs = new ArrayList<>();
+        for (DatasetId source : nullToEmpty(input.inputs())) {
+            String datasetName = name(source);
+            inputs.add(ol.newInputDatasetBuilder()
+                    .namespace(namespace)
+                    .name(datasetName)
+                    .facets(ol.newDatasetFacetsBuilder()
+                            .schema(schema(ol, inputColumns.getOrDefault(datasetName, Set.of())))
+                            .build())
+                    .build());
         }
 
         OpenLineage.OutputDataset output = ol.newOutputDatasetBuilder()
@@ -131,6 +149,16 @@ public final class EventConverter {
         String startEvent = OpenLineageClientUtils.toJson(event(ol, OpenLineage.RunEvent.EventType.START, start, run, job, inputs, output));
         String completeEvent = OpenLineageClientUtils.toJson(event(ol, OpenLineage.RunEvent.EventType.COMPLETE, complete, run, job, inputs, output));
         return new ConversionResult(List.of(startEvent, completeEvent), List.copyOf(diagnostics), lineageComplete, startTimeSource);
+    }
+
+    private static OpenLineage.SchemaDatasetFacet schema(OpenLineage ol, Set<String> columns) {
+        List<OpenLineage.SchemaDatasetFacetFields> fields = new ArrayList<>();
+        for (String column : columns) {
+            if (!blank(column)) {
+                fields.add(ol.newSchemaDatasetFacetFieldsBuilder().name(column).type("STRING").build());
+            }
+        }
+        return ol.newSchemaDatasetFacetBuilder().fields(fields).build();
     }
 
     private static OpenLineage.InputField inputField(

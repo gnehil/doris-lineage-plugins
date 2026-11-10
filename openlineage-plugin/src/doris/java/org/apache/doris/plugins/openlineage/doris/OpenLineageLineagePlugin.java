@@ -85,9 +85,10 @@ public final class OpenLineageLineagePlugin implements LineagePlugin {
             var sent = sender.send(config, queryId, target, converted.events().get(0), converted.events().get(1));
             if (!sent.sent() && sent.drop() != null) {
                 LOG.log(Level.WARNING,
-                        "query_id={0} target_table={1} attempts={2} http_status={3} error_type={4}",
-                        new Object[] {sent.drop().queryId(), sent.drop().targetTable(), sent.drop().attempts(),
-                                sent.drop().httpStatus(), sent.drop().errorType()});
+                        "query_id={0} target_table={1} event_type={2} run_id={3} attempts={4} http_status={5} error_type={6}",
+                        new Object[] {sent.drop().queryId(), sent.drop().targetTable(), sent.drop().eventType(),
+                                sent.drop().runId(), sent.drop().attempts(), sent.drop().httpStatus(),
+                                sent.drop().errorType()});
             }
             return sent.sent();
         } catch (RuntimeException e) {

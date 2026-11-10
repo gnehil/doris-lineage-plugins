@@ -49,7 +49,7 @@ Job namespace 与数据集 namespace 相同。Job name 等于输出数据集的 
 
 Run ID：Query ID 已是 UUID 时直接使用。否则用 UUIDv5，输入是无歧义编码的 `(cluster namespace, job name, query ID)`。没有 Query ID 时，为本次 `exec` 生成随机 UUID，同一次发送的重试复用它；再次收到同一逻辑事件时无法据此去重。重试始终复用同一份事件和同一个 Run ID。
 
-列级 facet 里的数据集引用必须使用上面的 namespace 和 name。
+列级 facet 里的数据集引用必须使用上面的 namespace 和 name。输入和输出数据集都带 `schema.fields`，字段名覆盖列级边引用的源列和目标列。Marquez 0.50.0 只从 `schema.fields` 建立字段记录，缺了就会丢掉列级边。字段类型在 `LineageInfo` 未提供时记为 `STRING`，不表示真实列类型。
 
 ## 失败
 
@@ -61,7 +61,7 @@ Run ID：Query ID 已是 UUID 时直接使用。否则用 UUIDv5，输入是无�
 
 有效 `Retry-After` 超过剩余发送预算时，放弃重试，不截断后提前重试。缺失或无效时，第一次重试前等待 200ms，第二次前等待 500ms；该等待也受剩余预算约束。
 
-发送失败不重新入队。重试耗尽或触到上述立即丢弃条件后，记录诊断信息并丢弃，然后继续处理后续事件。诊断字段为 `query_id`、`target_table`、`attempts`、`http_status`、`error_type`。没有 HTTP 响应时 `http_status` 为空，不编造状态码。不记录鉴权头。
+发送失败不重新入队。重试耗尽或触到上述立即丢弃条件后，记录诊断信息并丢弃，然后继续处理后续事件。诊断字段为 `query_id`、`target_table`、`event_type`、`run_id`、`attempts`、`http_status`、`error_type`。`event_type` 区分 START 失败和 COMPLETE 失败。没有 HTTP 响应时 `http_status` 为空，不编造状态码。不记录鉴权头。
 
 ## 验收消费端
 
@@ -75,7 +75,7 @@ Run ID：Query ID 已是 UUID 时直接使用。否则用 UUIDv5，输入是无�
 
 `START` 在预算内仍未拿到 2xx：丢弃，不发 `COMPLETE`。`START` 已成功而 `COMPLETE` 失败：只重试 `COMPLETE`，不重发 `START`。
 
-`eventTime`：Doris 4.0.6 的 `timestampMs` 是血缘事件生成时刻，也就是查询结束时刻；`durationMs` 是查询耗时。两者都有效且耗时不为负时，`START` 用 `timestampMs - durationMs`，`COMPLETE` 用 `timestampMs`。耗时为零可以，两条时间相同。缺任一字段、耗时为负，或相减溢出，则两条都用插件收到 `LineageInfo` 的时刻，并记录诊断 `start_time_source=receive_time`。两条事件不混用两套时间。
+`eventTime`：Doris 4.0.6 的 `timestampMs` 是血缘事件生成时刻，也就是查询结束时刻；`durationMs` 是查询耗时。两者都有效且耗时不为负时，`START` 用 `timestampMs - durationMs`，`COMPLETE` 用 `timestampMs`。耗时为零可以，两条时间相同。`timestampMs` 有效但耗时缺失、为负或相减溢出时，两条事件都用这个 `timestampMs`，不用收到时刻，避免队列积压把完成时间推迟。只有 `timestampMs` 本身缺失时，两条才用收到时刻，并记录 `start_time_source=receive_time`。
 
 ## 构建
 

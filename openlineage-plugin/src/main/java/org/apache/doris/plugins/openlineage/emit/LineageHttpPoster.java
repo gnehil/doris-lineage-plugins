@@ -21,6 +21,10 @@ import java.time.ZonedDateTime;
 import java.util.Map;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
 /**
@@ -28,8 +32,14 @@ import java.util.concurrent.TimeoutException;
  */
 public final class LineageHttpPoster implements HttpPoster, AutoCloseable {
     private final CloseableHttpClient client;
+    private final ExecutorService attempts;
 
     public LineageHttpPoster(Duration connectTimeout) {
+        this.attempts = Executors.newCachedThreadPool(task -> {
+            Thread thread = new Thread(task, "openlineage-http");
+            thread.setDaemon(true);
+            return thread;
+        });
         this.client = HttpClients.custom()
                 .disableAutomaticRetries()
                 .disableRedirectHandling()
@@ -43,6 +53,25 @@ public final class LineageHttpPoster implements HttpPoster, AutoCloseable {
         request.setConfig(requestConfig(timeout));
         request.setEntity(new ByteArrayEntity(body, ContentType.APPLICATION_JSON));
         headers.forEach(request::setHeader);
+        Future<PostResult> exchange = attempts.submit(() -> execute(request));
+        try {
+            return exchange.get(Math.max(1, timeout.toMillis()), TimeUnit.MILLISECONDS);
+        } catch (TimeoutException e) {
+            request.cancel();
+            exchange.cancel(true);
+            return PostResult.failure("timeout");
+        } catch (ExecutionException e) {
+            request.cancel();
+            return classify(e.getCause() == null ? e : e.getCause());
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            request.cancel();
+            exchange.cancel(true);
+            return PostResult.failure("timeout");
+        }
+    }
+
+    private PostResult execute(HttpPost request) {
         try (ClassicHttpResponse response = client.execute(request)) {
             String retryAfter = response.getFirstHeader("Retry-After") == null
                     ? null
@@ -55,6 +84,7 @@ public final class LineageHttpPoster implements HttpPoster, AutoCloseable {
 
     @Override
     public void close() throws IOException {
+        attempts.shutdownNow();
         client.close();
     }
 

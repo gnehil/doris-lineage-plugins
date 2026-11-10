@@ -53,6 +53,7 @@ class EventSenderTest {
         EventSender.SendResult rejectedResult = send(rejected, 5_000);
         assertEquals(1, rejected.bodies.size());
         assertEquals(400, rejectedResult.drop().httpStatus());
+        assertEquals("START", rejectedResult.drop().eventType());
 
         ScriptPoster refused = new ScriptPoster(PostResult.failure("connect"), PostResult.http(200, null));
         EventSender.SendResult refusedResult = send(refused, 5_000);

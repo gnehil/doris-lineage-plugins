@@ -47,6 +47,10 @@ class EventConverterTest {
 
         JsonNode inputs = start.get("inputs");
         assertEquals("internal.sales.orders", inputs.get(0).get("name").asText());
+        assertEquals("amt", inputs.get(0).at("/facets/schema/fields/0/name").asText());
+        assertEquals("region", inputs.get(1).at("/facets/schema/fields/0/name").asText());
+        assertEquals("amount", start.at("/outputs/0/facets/schema/fields/0/name").asText());
+        assertEquals("total", start.at("/outputs/0/facets/schema/fields/1/name").asText());
         assertEquals("internal.sales.customers", inputs.get(1).get("name").asText());
         JsonNode amount = start.at("/outputs/0/facets/columnLineage/fields/amount/inputFields");
         assertEquals("internal.sales.orders", amount.get(0).get("name").asText());
@@ -147,6 +151,9 @@ class EventConverterTest {
         assertEquals(Instant.ofEpochMilli(11_990_010L), Instant.parse(start.get("eventTime").asText()));
         assertEquals(Instant.ofEpochMilli(12_000_010L), Instant.parse(complete.get("eventTime").asText()));
         assertEquals(new DorisEventTimes.Window(null, null), DorisEventTimes.from(DorisEventTimes.UNKNOWN, 10L));
+        DorisEventTimes.Window knownEnd = DorisEventTimes.from(9_000L, DorisEventTimes.UNKNOWN);
+        assertEquals(9_000L, knownEnd.startMs());
+        assertEquals(0L, knownEnd.durationMs());
     }
 
     @Test

@@ -14,13 +14,16 @@ public final class DorisEventTimes {
     }
 
     public static Window from(long timestampMs, long durationMs) {
-        if (timestampMs == UNKNOWN || durationMs == UNKNOWN || durationMs < 0) {
+        if (timestampMs == UNKNOWN) {
             return new Window(null, null);
+        }
+        if (durationMs == UNKNOWN || durationMs < 0) {
+            return new Window(timestampMs, 0L);
         }
         try {
             return new Window(Math.subtractExact(timestampMs, durationMs), durationMs);
         } catch (ArithmeticException e) {
-            return new Window(null, null);
+            return new Window(timestampMs, 0L);
         }
     }
 }

@@ -2,7 +2,11 @@ package org.apache.doris.plugins.openlineage.emit;
 
 import org.apache.doris.plugins.openlineage.config.PluginConfig;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
 import java.net.URI;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
@@ -21,6 +25,8 @@ public final class EventSender {
     private static final Duration SECOND_BACKOFF = Duration.ofMillis(500);
     private static final int MAX_RETRIES = 2;
 
+    private static final ObjectMapper JSON = new ObjectMapper();
+
     private final HttpPoster poster;
     private final Clock clock;
     private final Sleeper sleeper;
@@ -34,13 +40,13 @@ public final class EventSender {
     public SendResult send(PluginConfig config, String queryId, String targetTable, String startJson, String completeJson) {
         long deadline = clock.monotonicNanos() + SEND_BUDGET.toNanos();
         Map<String, String> headers = headers(config);
-        Attempt start = sendOne(config.url(), headers, startJson.getBytes(java.nio.charset.StandardCharsets.UTF_8), config.timeoutMs(), deadline);
+        Attempt start = sendOne(config.url(), headers, startJson.getBytes(StandardCharsets.UTF_8), config.timeoutMs(), deadline);
         if (!start.success) {
-            return SendResult.dropped(new Drop(queryId, targetTable, start.attempts, start.status, start.errorType));
+            return SendResult.dropped(drop(queryId, targetTable, "START", startJson, start));
         }
-        Attempt complete = sendOne(config.url(), headers, completeJson.getBytes(java.nio.charset.StandardCharsets.UTF_8), config.timeoutMs(), deadline);
+        Attempt complete = sendOne(config.url(), headers, completeJson.getBytes(StandardCharsets.UTF_8), config.timeoutMs(), deadline);
         if (!complete.success) {
-            return SendResult.dropped(new Drop(queryId, targetTable, complete.attempts, complete.status, complete.errorType));
+            return SendResult.dropped(drop(queryId, targetTable, "COMPLETE", completeJson, complete));
         }
         return SendResult.ok();
     }
@@ -132,7 +138,27 @@ public final class EventSender {
         void sleep(Duration duration);
     }
 
-    public record Drop(String queryId, String targetTable, int attempts, Integer httpStatus, String errorType) {
+    public record Drop(
+            String queryId,
+            String targetTable,
+            String eventType,
+            String runId,
+            int attempts,
+            Integer httpStatus,
+            String errorType) {
+    }
+
+    private static Drop drop(String queryId, String targetTable, String eventType, String json, Attempt attempt) {
+        return new Drop(queryId, targetTable, eventType, runId(json), attempt.attempts, attempt.status, attempt.errorType);
+    }
+
+    private static String runId(String json) {
+        try {
+            JsonNode runId = JSON.readTree(json).path("run").path("runId");
+            return runId.isMissingNode() || runId.isNull() ? null : runId.asText();
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     public record SendResult(boolean sent, Drop drop) {
