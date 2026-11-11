@@ -93,6 +93,31 @@ class LineageHttpPosterTest {
     }
 
     @Test
+    void fastFailuresAreNotReportedAsHandoffTimeouts() throws Exception {
+        java.util.concurrent.atomic.AtomicInteger lookups = new java.util.concurrent.atomic.AtomicInteger();
+        DnsResolver resolver = new DnsResolver() {
+            @Override
+            public InetAddress[] resolve(String host) throws UnknownHostException {
+                lookups.incrementAndGet();
+                throw new UnknownHostException(host);
+            }
+
+            @Override
+            public String resolveCanonicalHostname(String host) {
+                return host;
+            }
+        };
+        try (LineageHttpPoster poster = new LineageHttpPoster(Duration.ofMillis(200), resolver)) {
+            for (int i = 0; i < 2_000; i++) {
+                PostResult result = poster.post(URI.create("http://fast.invalid/api/v1/lineage"),
+                        "{}".getBytes(), Map.of(), Duration.ofMillis(200));
+                assertEquals("dns", result.errorType());
+            }
+        }
+        assertEquals(2_000, lookups.get());
+    }
+
+    @Test
     void blockedDnsDoesNotAccumulateAttempts() throws Exception {
         DnsResolver blocked = new DnsResolver() {
             @Override
@@ -117,6 +142,45 @@ class LineageHttpPosterTest {
                 assertEquals("timeout", result.errorType());
             }
             assertTrue(poster.inFlight() <= 1, "inFlight=" + poster.inFlight());
+        }
+    }
+
+    @Test
+    void interruptedCallerDoesNotSpinUntilTheDeadline() throws Exception {
+        DnsResolver blocked = new DnsResolver() {
+            @Override
+            public InetAddress[] resolve(String host) throws UnknownHostException {
+                try {
+                    Thread.sleep(30_000);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+                throw new UnknownHostException(host);
+            }
+
+            @Override
+            public String resolveCanonicalHostname(String host) {
+                return host;
+            }
+        };
+        java.util.concurrent.atomic.AtomicLong elapsedMs = new java.util.concurrent.atomic.AtomicLong();
+        java.util.concurrent.atomic.AtomicBoolean stillInterrupted = new java.util.concurrent.atomic.AtomicBoolean();
+        try (LineageHttpPoster poster = new LineageHttpPoster(Duration.ofMillis(300), blocked)) {
+            Thread occupier = new Thread(() -> poster.post(URI.create("http://blocked.invalid/api"), "{}".getBytes(), Map.of(), Duration.ofMillis(2_000)));
+            occupier.start();
+            Thread.sleep(50);
+            Thread caller = new Thread(() -> {
+                Thread.currentThread().interrupt();
+                long started = System.nanoTime();
+                poster.post(URI.create("http://blocked.invalid/api"), "{}".getBytes(), Map.of(), Duration.ofMillis(300));
+                elapsedMs.set((System.nanoTime() - started) / 1_000_000);
+                stillInterrupted.set(Thread.currentThread().isInterrupted());
+            });
+            caller.start();
+            caller.join(1_000);
+            assertTrue(elapsedMs.get() < 80, "elapsedMs=" + elapsedMs.get());
+            assertTrue(stillInterrupted.get());
+            occupier.interrupt();
         }
     }
 

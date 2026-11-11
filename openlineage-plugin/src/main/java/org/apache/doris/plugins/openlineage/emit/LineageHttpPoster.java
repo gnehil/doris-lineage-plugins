@@ -27,6 +27,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Future;
 import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.locks.LockSupport;
 import java.util.concurrent.SynchronousQueue;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
@@ -67,26 +68,43 @@ public final class LineageHttpPoster implements HttpPoster, AutoCloseable {
         request.setConfig(requestConfig(timeout));
         request.setEntity(new ByteArrayEntity(body, ContentType.APPLICATION_JSON));
         headers.forEach(request::setHeader);
-        Future<PostResult> exchange;
-        try {
-            exchange = attempts.submit(() -> execute(request));
-        } catch (RejectedExecutionException e) {
-            return PostResult.failure("timeout");
-        }
-        try {
-            return exchange.get(Math.max(1, timeout.toMillis()), TimeUnit.MILLISECONDS);
-        } catch (TimeoutException e) {
-            request.cancel();
-            exchange.cancel(true);
-            return PostResult.failure("timeout");
-        } catch (ExecutionException e) {
-            request.cancel();
-            return classify(e.getCause() == null ? e : e.getCause());
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            request.cancel();
-            exchange.cancel(true);
-            return PostResult.failure("timeout");
+        long deadline = System.nanoTime() + timeout.toNanos();
+        while (true) {
+            if (Thread.currentThread().isInterrupted()) {
+                return PostResult.failure("timeout");
+            }
+            long remaining = deadline - System.nanoTime();
+            if (remaining <= 0) {
+                return PostResult.failure("timeout");
+            }
+            Future<PostResult> exchange;
+            try {
+                exchange = attempts.submit(() -> execute(request));
+            } catch (RejectedExecutionException e) {
+                if (Thread.currentThread().isInterrupted()) {
+                    return PostResult.failure("timeout");
+                }
+                LockSupport.parkNanos(Math.min(remaining, 1_000_000L));
+                if (Thread.currentThread().isInterrupted()) {
+                    return PostResult.failure("timeout");
+                }
+                continue;
+            }
+            try {
+                return exchange.get(remaining, TimeUnit.NANOSECONDS);
+            } catch (TimeoutException e) {
+                request.cancel();
+                exchange.cancel(true);
+                return PostResult.failure("timeout");
+            } catch (ExecutionException e) {
+                request.cancel();
+                return classify(e.getCause() == null ? e : e.getCause());
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                request.cancel();
+                exchange.cancel(true);
+                return PostResult.failure("timeout");
+            }
         }
     }
 
