@@ -34,7 +34,7 @@ implements: [goal-and-requirements]
 
 `LineageInfo` 给出了依赖，但来源列无法解析：不凭空补边。记录转换诊断，至少包含 `query_id`、目标列和原因。这种输出可以发送已解析的边，但诊断必须标明转换不完整，不能与完整成功混在一起。
 
-数据集级间接依赖也要带来源列。`columnLineage` 使用 facet `1-2-0`，其中每个 `InputField` 都必须有 `field`。发出该 facet 时 `fields` 必须存在，没有输出列边时为空对象。同一输出列上的多种依赖合并进同一个 `fields` 项，不互相覆盖。经视图读取时，列级引用用原始表和原始列，不用视图本身，以便和 `tableLineageSet` 里的输入表一致。输入和输出的 `schema.fields` 来自 Doris 基础表 schema（`getBaseSchema(false)`），不含隐藏列和同步物化视图的物理索引列。外部表不在转换时调用 `getBaseSchema`，只用事件里已经带有的列名和类型，避免缓存未命中时去远程拉 schema。读取失败或没有可用列时不发送空的 `schema.fields`，记 `schema unavailable`。类型用元数据里的 SQL 类型，不从血缘边推断，也不把未知类型写成 `STRING`。数据集级间接依赖只复制到本次 `targetColumns` 里的输出列。展开后的边数超过 10000 时不做逐列复制，保留紧凑的 `columnLineage.dataset`，并记诊断。Marquez 0.50.0 只读 `columnLineage.fields`，所以未超限时这些依赖同时出现在那些输出列的 `inputFields`。
+数据集级间接依赖也要带来源列。`columnLineage` 使用 facet `1-2-0`，其中每个 `InputField` 都必须有 `field`。发出该 facet 时 `fields` 必须存在，没有输出列边时为空对象。同一输出列上的多种依赖合并进同一个 `fields` 项，不互相覆盖。经视图读取时，列级引用用原始表和原始列，不用视图本身，以便和 `tableLineageSet` 里的输入表一致。输入和输出的 `schema.fields` 来自 Doris 基础表 schema（`getBaseSchema(false)`），不含隐藏列和同步物化视图的物理索引列。外部表不在转换时调用 `getBaseSchema`，只用事件里已经带有的列名和类型，避免缓存未命中时去远程拉 schema。读取失败或没有可用列时不发送空的 `schema.fields`，记 `schema unavailable`。类型用与列名同一身份的 `Column.getType().toSql()`。不用 Nereids `DataType.toString()`，所以外部表的 `STRUCT<id:INT>` 不会被写成调试字符串。没有这份 SQL 类型就省略，不编造。数据集级间接依赖只复制到本次 `targetColumns` 里的输出列。展开后的边数超过 10000 时不做逐列复制，保留紧凑的 `columnLineage.dataset`，并记诊断。Marquez 0.50.0 只读 `columnLineage.fields`，所以未超限时这些依赖同时出现在那些输出列的 `inputFields`。
 
 数据集身份无法确定时不发送事件，并记录同一类诊断。
 

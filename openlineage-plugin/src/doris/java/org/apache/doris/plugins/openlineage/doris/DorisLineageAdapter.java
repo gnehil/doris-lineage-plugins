@@ -8,6 +8,7 @@ import org.apache.doris.nereids.lineage.LineageInfo;
 import org.apache.doris.nereids.trees.expressions.Expression;
 import org.apache.doris.nereids.trees.expressions.Slot;
 import org.apache.doris.nereids.trees.expressions.SlotReference;
+import org.apache.doris.plugins.openlineage.convert.ColumnTypes;
 import org.apache.doris.plugins.openlineage.convert.DorisEventTimes;
 import org.apache.doris.plugins.openlineage.convert.LineageInput;
 import org.apache.doris.plugins.openlineage.convert.SourceIdentity;
@@ -308,10 +309,24 @@ public final class DorisLineageAdapter {
     }
 
     private static String typeOf(Slot slot) {
-        if (slot instanceof SlotReference reference && reference.getDataType() != null) {
-            return reference.getDataType().toString();
+        if (!(slot instanceof SlotReference reference)) {
+            return null;
         }
-        return null;
+        Column original = reference.getOriginalColumn().orElse(null);
+        Column oneLevel = reference.getOneLevelColumn().orElse(null);
+        return ColumnTypes.sqlType(columnRef(slot).column(), columnOf(original), sqlType(original), columnOf(oneLevel), sqlType(oneLevel));
+    }
+
+    private static String sqlType(Column column) {
+        if (column == null || column.getType() == null) {
+            return null;
+        }
+        try {
+            String sql = column.getType().toSql();
+            return blank(sql) ? null : sql;
+        } catch (RuntimeException e) {
+            return null;
+        }
     }
 
     private static List<String> outputColumns(LineageInfo info) {
