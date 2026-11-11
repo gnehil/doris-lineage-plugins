@@ -2,6 +2,7 @@ package org.apache.doris.plugins.openlineage.doris;
 
 import org.apache.doris.catalog.Column;
 import org.apache.doris.catalog.TableIf;
+import org.apache.doris.datasource.ExternalTable;
 import org.apache.doris.nereids.lineage.LineageContext;
 import org.apache.doris.nereids.lineage.LineageInfo;
 import org.apache.doris.nereids.trees.expressions.Expression;
@@ -17,7 +18,9 @@ import org.apache.doris.plugins.openlineage.convert.LineageInput.DatasetIndirect
 import org.apache.doris.plugins.openlineage.convert.LineageInput.Kind;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * The only Doris import boundary. It copies already-analyzed lineage into {@link LineageInput}.
@@ -48,6 +51,8 @@ public final class DorisLineageAdapter {
                 inputs,
                 columns,
                 datasetIndirect,
+                schemas(info),
+                outputColumns(info),
                 eventTimes(context).startMs(),
                 eventTimes(context).durationMs(),
                 receivedAtMs);
@@ -183,6 +188,144 @@ public final class DorisLineageAdapter {
         } catch (Exception e) {
             return null;
         }
+    }
+
+    private static List<LineageInput.DatasetSchema> schemas(LineageInfo info) {
+        List<LineageInput.DatasetSchema> schemas = new ArrayList<>();
+        addSchema(schemas, info, info.getTargetTable());
+        if (info.getTableLineageSet() != null) {
+            for (TableIf table : info.getTableLineageSet()) {
+                addSchema(schemas, info, table);
+            }
+        }
+        return schemas;
+    }
+
+    private static void addSchema(List<LineageInput.DatasetSchema> schemas, LineageInfo info, TableIf table) {
+        DatasetId id = datasetId(table);
+        if (id == null) {
+            return;
+        }
+        if (table instanceof ExternalTable) {
+            List<LineageInput.SchemaField> known = knownFields(info, id);
+            schemas.add(known.isEmpty()
+                    ? LineageInput.DatasetSchema.unavailable(id)
+                    : LineageInput.DatasetSchema.ready(id, known));
+            return;
+        }
+        List<LineageInput.SchemaField> fields = new ArrayList<>();
+        List<Column> columns;
+        try {
+            columns = table.getBaseSchema(false);
+        } catch (RuntimeException e) {
+            schemas.add(LineageInput.DatasetSchema.unavailable(id));
+            return;
+        }
+        if (columns == null) {
+            schemas.add(LineageInput.DatasetSchema.unavailable(id));
+            return;
+        }
+        if (columns != null) {
+            for (org.apache.doris.catalog.Column column : columns) {
+                if (column == null || blank(column.getName())) {
+                    continue;
+                }
+                String type = null;
+                try {
+                    if (column.getType() != null) {
+                        type = column.getType().toSql();
+                    }
+                } catch (RuntimeException ignored) {
+                    type = null;
+                }
+                fields.add(new LineageInput.SchemaField(column.getName(), type));
+            }
+        }
+        if (fields.isEmpty()) {
+            schemas.add(LineageInput.DatasetSchema.unavailable(id));
+            return;
+        }
+        schemas.add(LineageInput.DatasetSchema.ready(id, fields));
+    }
+
+    private static List<LineageInput.SchemaField> knownFields(LineageInfo info, DatasetId dataset) {
+        Map<String, String> fields = new LinkedHashMap<>();
+        if (info.getTargetColumns() != null && dataset.equals(datasetId(info.getTargetTable()))) {
+            for (Slot slot : info.getTargetColumns()) {
+                rememberOutput(fields, slot);
+            }
+        }
+        rememberExpressions(fields, dataset, info.getDirectLineageMap());
+        rememberExpressions(fields, dataset, info.getOutputIndirectLineageMap());
+        if (info.getDatasetIndirectLineageMap() != null) {
+            for (Expression expression : info.getDatasetIndirectLineageMap().values()) {
+                rememberExpression(fields, dataset, expression);
+            }
+        }
+        List<LineageInput.SchemaField> result = new ArrayList<>();
+        fields.forEach((name, type) -> result.add(new LineageInput.SchemaField(name, type)));
+        return result;
+    }
+
+    private static void rememberExpressions(
+            Map<String, String> fields,
+            DatasetId dataset,
+            Map<SlotReference, ? extends com.google.common.collect.SetMultimap<?, Expression>> lineage) {
+        if (lineage == null) {
+            return;
+        }
+        for (com.google.common.collect.SetMultimap<?, Expression> byType : lineage.values()) {
+            if (byType == null) {
+                continue;
+            }
+            for (Expression expression : byType.values()) {
+                rememberExpression(fields, dataset, expression);
+            }
+        }
+    }
+
+    private static void rememberExpression(Map<String, String> fields, DatasetId dataset, Expression expression) {
+        if (expression == null || expression.getInputSlots() == null) {
+            return;
+        }
+        for (Slot slot : expression.getInputSlots()) {
+            ColumnRef ref = columnRef(slot);
+            if (ref.dataset() != null && dataset.equals(ref.dataset())) {
+                rememberNamed(fields, ref.column(), typeOf(slot));
+            }
+        }
+    }
+
+    private static void rememberOutput(Map<String, String> fields, Slot slot) {
+        rememberNamed(fields, columnName(slot), typeOf(slot));
+    }
+
+    private static void rememberNamed(Map<String, String> fields, String name, String type) {
+        if (blank(name) || fields.containsKey(name)) {
+            return;
+        }
+        fields.put(name, type);
+    }
+
+    private static String typeOf(Slot slot) {
+        if (slot instanceof SlotReference reference && reference.getDataType() != null) {
+            return reference.getDataType().toString();
+        }
+        return null;
+    }
+
+    private static List<String> outputColumns(LineageInfo info) {
+        List<String> columns = new ArrayList<>();
+        if (info.getTargetColumns() == null) {
+            return columns;
+        }
+        for (Slot slot : info.getTargetColumns()) {
+            String name = columnName(slot);
+            if (!blank(name)) {
+                columns.add(name);
+            }
+        }
+        return columns;
     }
 
     private static DorisEventTimes.Window eventTimes(LineageContext context) {

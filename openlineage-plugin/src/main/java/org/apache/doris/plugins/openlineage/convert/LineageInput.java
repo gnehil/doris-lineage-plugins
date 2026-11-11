@@ -12,6 +12,8 @@ public record LineageInput(
         List<DatasetId> inputs,
         List<ColumnEdge> columns,
         List<DatasetIndirect> datasetIndirect,
+        List<DatasetSchema> schemas,
+        List<String> outputColumns,
         Long startTimeMs,
         Long durationMs,
         long receivedAtMs) {
@@ -32,5 +34,18 @@ public record LineageInput(
     }
 
     public record DatasetIndirect(DatasetId dataset, String column, String subtype) {
+    }
+
+    public record SchemaField(String name, String type) {
+    }
+
+    public record DatasetSchema(DatasetId dataset, List<SchemaField> fields, boolean available) {
+        public static DatasetSchema ready(DatasetId dataset, List<SchemaField> fields) {
+            return new DatasetSchema(dataset, fields, true);
+        }
+
+        public static DatasetSchema unavailable(DatasetId dataset) {
+            return new DatasetSchema(dataset, List.of(), false);
+        }
     }
 }

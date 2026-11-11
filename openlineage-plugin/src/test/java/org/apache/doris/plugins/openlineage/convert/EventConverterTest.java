@@ -6,6 +6,8 @@ import org.apache.doris.plugins.openlineage.convert.LineageInput.ColumnEdge;
 import org.apache.doris.plugins.openlineage.convert.LineageInput.ColumnRef;
 import org.apache.doris.plugins.openlineage.convert.LineageInput.DatasetId;
 import org.apache.doris.plugins.openlineage.convert.LineageInput.DatasetIndirect;
+import org.apache.doris.plugins.openlineage.convert.LineageInput.DatasetSchema;
+import org.apache.doris.plugins.openlineage.convert.LineageInput.SchemaField;
 import org.apache.doris.plugins.openlineage.convert.LineageInput.Kind;
 import org.junit.jupiter.api.Test;
 
@@ -48,9 +50,14 @@ class EventConverterTest {
         JsonNode inputs = start.get("inputs");
         assertEquals("internal.sales.orders", inputs.get(0).get("name").asText());
         assertEquals("amt", inputs.get(0).at("/facets/schema/fields/0/name").asText());
+        assertEquals("DECIMAL(10,2)", inputs.get(0).at("/facets/schema/fields/0/type").asText());
         assertEquals("region", inputs.get(1).at("/facets/schema/fields/0/name").asText());
         assertEquals("amount", start.at("/outputs/0/facets/schema/fields/0/name").asText());
-        assertEquals("total", start.at("/outputs/0/facets/schema/fields/1/name").asText());
+        assertEquals("DECIMAL(10,2)", start.at("/outputs/0/facets/schema/fields/0/type").asText());
+        assertEquals("flag", start.at("/outputs/0/facets/schema/fields/2/name").asText());
+        assertEquals("TINYINT", start.at("/outputs/0/facets/schema/fields/2/type").asText());
+        assertTrue(start.at("/outputs/0/facets/columnLineage/fields/flag").isMissingNode()
+                || start.at("/outputs/0/facets/columnLineage/fields/flag/inputFields").toString().contains("FILTER"));
         assertEquals("internal.sales.customers", inputs.get(1).get("name").asText());
         JsonNode amount = start.at("/outputs/0/facets/columnLineage/fields/amount/inputFields");
         assertEquals("internal.sales.orders", amount.get(0).get("name").asText());
@@ -66,6 +73,8 @@ class EventConverterTest {
         assertEquals("internal.sales.customers", datasetLevel.get(0).get("name").asText());
         assertEquals("region", datasetLevel.get(0).get("field").asText());
         assertEquals("FILTER", datasetLevel.get(0).at("/transformations/0/subtype").asText());
+        assertTrue(start.at("/outputs/0/facets/columnLineage/fields/amount/inputFields").toString().contains("\"field\":\"region\"")
+                || start.at("/outputs/0/facets/columnLineage/fields/amount/inputFields").toString().contains("\"field\": \"region\""));
         ColumnLineageSchema.assertValid(start.at("/outputs/0/facets/columnLineage"));
     }
 
@@ -80,6 +89,8 @@ class EventConverterTest {
                         new ColumnEdge("amount", Kind.DIRECT, "IDENTITY", List.of(new ColumnRef(ORDERS, "amt"))),
                         new ColumnEdge("amount", Kind.INDIRECT, "WINDOW", List.of(new ColumnRef(ORDERS, "order_id")))),
                 List.of(),
+                List.of(),
+                List.of("amount"),
                 1_000L,
                 1L,
                 2_500L);
@@ -103,13 +114,18 @@ class EventConverterTest {
                 List.of(CUSTOMERS),
                 List.of(),
                 List.of(new DatasetIndirect(CUSTOMERS, "region", "FILTER")),
+                List.of(DatasetSchema.ready(SUMMARY, List.of(new SchemaField("amount", "DECIMAL(10,2)"), new SchemaField("b", "INT")))),
+                List.of("amount"),
                 1_000L,
                 1L,
                 2_500L);
         JsonNode facet = JSON.readTree(new EventConverter(UUID::randomUUID).convert(input).events().get(0))
                 .at("/outputs/0/facets/columnLineage");
-        assertTrue(facet.get("fields").isObject());
-        assertEquals(0, facet.get("fields").size());
+        assertEquals("region", facet.at("/fields/amount/inputFields/0/field").asText());
+        assertEquals("FILTER", facet.at("/fields/amount/inputFields/0/transformations/0/subtype").asText());
+        assertTrue(facet.at("/fields/b").isMissingNode());
+        assertEquals("b", JSON.readTree(new EventConverter(UUID::randomUUID).convert(input).events().get(0))
+                .at("/outputs/0/facets/schema/fields/1/name").asText());
         assertEquals("region", facet.at("/dataset/0/field").asText());
         ColumnLineageSchema.assertValid(facet);
     }
@@ -172,6 +188,8 @@ class EventConverterTest {
                 List.of(ORDERS),
                 List.of(new ColumnEdge("amount", Kind.DIRECT, null, List.of(new ColumnRef(null, "amt")))),
                 List.of(),
+                List.of(),
+                List.of("amount"),
                 1_000L,
                 1L,
                 9_000L);
@@ -194,6 +212,8 @@ class EventConverterTest {
                     List.of(ORDERS),
                     List.of(new ColumnEdge("amount", Kind.DIRECT, null, sources)),
                     List.of(),
+                    List.of(),
+                    List.of("amount"),
                     1_000L,
                     1L,
                     9_000L);
@@ -210,6 +230,8 @@ class EventConverterTest {
                 List.of(ORDERS),
                 List.of(new ColumnEdge("literal_only", Kind.CONSTANT, null, List.of())),
                 List.of(),
+                List.of(),
+                List.of(),
                 1_000L,
                 1L,
                 9_000L);
@@ -219,11 +241,46 @@ class EventConverterTest {
     }
 
     @Test
+    void skipsPerColumnExpansionWhenItWouldBeHuge() throws Exception {
+        List<String> outputs = new java.util.ArrayList<>();
+        List<DatasetIndirect> indirect = new java.util.ArrayList<>();
+        for (int i = 0; i < 200; i++) {
+            outputs.add("c" + i);
+            indirect.add(new DatasetIndirect(ORDERS, "s" + i, "GROUP_BY"));
+        }
+        LineageInput input = new LineageInput(
+                QUERY_ID.toString(), "warehouse-a", SUMMARY, List.of(ORDERS), List.of(), indirect,
+                List.of(DatasetSchema.ready(SUMMARY, List.of(new SchemaField("c0", "INT")))),
+                outputs, 1_000L, 1L, 2_500L);
+        EventConverter.ConversionResult result = new EventConverter(UUID::randomUUID).convert(input);
+        JsonNode facet = JSON.readTree(result.events().get(0)).at("/outputs/0/facets/columnLineage");
+        assertTrue(facet.at("/fields/c0").isMissingNode());
+        assertEquals("s0", facet.at("/dataset/0/field").asText());
+        assertTrue(result.diagnostics().stream().anyMatch(d -> d.reason().contains("skipped per-column expansion")));
+    }
+
+    @Test
+    void omitsSchemaFacetWhenSchemaIsUnavailable() throws Exception {
+        LineageInput input = new LineageInput(
+                QUERY_ID.toString(), "warehouse-a", SUMMARY, List.of(ORDERS),
+                List.of(new ColumnEdge("amount", Kind.DIRECT, "IDENTITY", List.of(new ColumnRef(ORDERS, "amt")))),
+                List.of(),
+                List.of(DatasetSchema.unavailable(SUMMARY), DatasetSchema.ready(ORDERS, List.of())),
+                List.of("amount"), 1_000L, 1L, 2_500L);
+        EventConverter.ConversionResult result = new EventConverter(UUID::randomUUID).convert(input);
+        JsonNode start = JSON.readTree(result.events().get(0));
+        assertTrue(start.at("/outputs/0/facets/schema").isMissingNode());
+        assertTrue(start.at("/inputs/0/facets/schema").isMissingNode());
+        assertEquals("amt", start.at("/outputs/0/facets/columnLineage/fields/amount/inputFields/0/field").asText());
+        assertTrue(result.diagnostics().stream().anyMatch(d -> d.reason().equals("schema unavailable")));
+    }
+
+    @Test
     void doesNotSendWhenTheOutputIdentityIsMissing() {
         LineageInput input = sample(QUERY_ID.toString(), 1_000L, 1L);
         LineageInput broken = new LineageInput(
                 input.queryId(), input.cluster(), new DatasetId("hive", " ", "order_summary"),
-                input.inputs(), input.columns(), input.datasetIndirect(),
+                input.inputs(), input.columns(), input.datasetIndirect(), input.schemas(), input.outputColumns(),
                 input.startTimeMs(), input.durationMs(), input.receivedAtMs());
         EventConverter.ConversionResult result = new EventConverter(UUID::randomUUID).convert(broken);
         assertTrue(result.events().isEmpty());
@@ -248,6 +305,14 @@ class EventConverterTest {
                         new ColumnEdge("total", Kind.INDIRECT, "AGGREGATION", List.of(new ColumnRef(ORDERS, "amt"))),
                         new ColumnEdge("literal_only", Kind.CONSTANT, null, List.of())),
                 List.of(new DatasetIndirect(CUSTOMERS, "region", "FILTER")),
+                List.of(
+                        DatasetSchema.ready(ORDERS, List.of(new SchemaField("amt", "DECIMAL(10,2)"), new SchemaField("qty", "INT"))),
+                        DatasetSchema.ready(CUSTOMERS, List.of(new SchemaField("region", "VARCHAR"))),
+                        DatasetSchema.ready(SUMMARY, List.of(
+                                new SchemaField("amount", "DECIMAL(10,2)"),
+                                new SchemaField("total", "DECIMAL(10,2)"),
+                                new SchemaField("flag", "TINYINT")))),
+                List.of("amount", "total", "flag"),
                 start,
                 duration,
                 2_500L);

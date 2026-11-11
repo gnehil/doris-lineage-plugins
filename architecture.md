@@ -49,7 +49,7 @@ Job namespace 与数据集 namespace 相同。Job name 等于输出数据集的 
 
 Run ID：Query ID 已是 UUID 时直接使用。否则用 UUIDv5，输入是无歧义编码的 `(cluster namespace, job name, query ID)`。没有 Query ID 时，为本次 `exec` 生成随机 UUID，同一次发送的重试复用它；再次收到同一逻辑事件时无法据此去重。重试始终复用同一份事件和同一个 Run ID。
 
-列级 facet 里的数据集引用必须使用上面的 namespace 和 name。输入和输出数据集都带 `schema.fields`，字段名覆盖列级边引用的源列和目标列。Marquez 0.50.0 只从 `schema.fields` 建立字段记录，缺了就会丢掉列级边。字段类型在 `LineageInfo` 未提供时记为 `STRING`，不表示真实列类型。
+列级 facet 里的数据集引用必须使用上面的 namespace 和 name。输入和输出数据集的 `schema.fields` 来自 Doris 基础表列元数据，不从血缘边推断。外部表不用会触发远程加载的 schema 接口，只用事件里已有的列。读不到 schema 时不发送空的 `fields`。Marquez 0.50.0 只遍历 `columnLineage.fields`。因此数据集级间接依赖除了写在 `columnLineage.dataset`，还复制到本次写入列的 `inputFields`。展开边数超过 10000 时不做这次复制，只保留紧凑的 `dataset`，并记诊断。
 
 ## 失败
 
