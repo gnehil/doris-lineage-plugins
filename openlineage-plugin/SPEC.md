@@ -14,6 +14,7 @@ implements: [goal-and-requirements]
 ## 责任
 
 - 实现 `LineagePlugin`，并实现、注册 `LineagePluginFactory`，通过 ServiceLoader 加载。名称稳定，供 `activate_lineage_plugin` 引用。只实现 `LineagePlugin` 不会被发现。
+- 安装用的是 shade 后的 jar。它的 `MANIFEST.MF` 主属性必须有 `Doris-Lineage-Plugin-Api-Version`，当前为 `1.0`，与当前 master 的 `lineage.plugin.api.version` 一致。目录加载器只比对 major；缺属性或 major 不同会在加载阶段拒绝，进不了 `initialize`。血缘这一族不把缺属性当成旧版放行。属性必须打在 shade 产物上，因为 shade 会重写 manifest。不读该属性的旧 FE 会忽略它。
 - `initialize` 读取并校验 `{plugin.path}/openlineage.yml`，创建可复用的 HTTP 客户端。配置非法则插件加载失败。不读进程工作目录，也不把环境变量当作第二配置源。字段契约见「配置」。配置只在启动时读取，变更后须重启 FE。
 - `eventFilter` 只读线程安全的本地状态。它在 DML 查询线程上调用，不读文件、不探测接收端、不等待锁。
 - 把直接依赖映射为 `DIRECT`，间接依赖映射为 `INDIRECT`。只有 `LineageInfo` 已经给出子类型时才填写子类型。映射与降级见下节。事件由 `openlineage-java` 1.27.0 生成，其 `schemaURL` 固定为 OpenLineage `2-0-2`。升级客户端前，发出的事件仍必须使用该 schemaURL。

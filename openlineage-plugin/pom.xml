@@ -15,6 +15,7 @@
     <jackson.version>2.18.2</jackson.version>
     <junit.version>5.11.4</junit.version>
     <openlineage.version>1.27.0</openlineage.version>
+    <lineage.plugin.api.version>1.0</lineage.plugin.api.version>
   </properties>
 
   <dependencies>
@@ -102,6 +103,13 @@
                   <exclude>org.apache.doris:*</exclude>
                 </excludes>
               </artifactSet>
+              <transformers>
+                <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
+                  <manifestEntries>
+                    <Doris-Lineage-Plugin-Api-Version>${lineage.plugin.api.version}</Doris-Lineage-Plugin-Api-Version>
+                  </manifestEntries>
+                </transformer>
+              </transformers>
             </configuration>
           </execution>
         </executions>

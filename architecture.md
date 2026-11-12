@@ -81,4 +81,4 @@ Run ID：Query ID 已是 UUID 时直接使用。否则用 UUIDv5，输入是无�
 
 针对 Doris 4.0.6 构建。Doris API 依赖包括 `fe-core` 和 `fe-extension-spi`：`LineagePlugin`、`LineagePluginFactory` 和 `LineageInfo` 在 `fe-core`，通用插件接口在 `fe-extension-spi`。二者都由 FE 在运行时提供，以 `provided` 依赖编译，不打入插件包。插件自带 OpenLineage、HTTP 等运行依赖，并验证依赖隔离和实际加载。其他 Doris 版本不默认为兼容。
 
-必须实现并注册 `LineagePluginFactory`，通过 ServiceLoader 加载。只实现 `LineagePlugin` 不会被发现。
+必须实现并注册 `LineagePluginFactory`，通过 ServiceLoader 加载。只实现 `LineagePlugin` 不会被发现。目录加载还要求 shade 后的 jar 声明 `Doris-Lineage-Plugin-Api-Version`，major 与所部署 FE 一致。当前声明见 `openlineage-plugin`。

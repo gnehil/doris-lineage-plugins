@@ -20,7 +20,7 @@ mvn -Ddoris.fe.lib=/path/to/fe/lib package
 
 ## 安装
 
-Doris 只扫描 `${plugin_dir}/lineage` 的直接子目录。把 jar 和 `openlineage.yml` 都放在 `${plugin_dir}/lineage/openlineage/`：
+Doris 只扫描 `${plugin_dir}/lineage` 的直接子目录。把 jar 和 `openlineage.yml` 都放在 `${plugin_dir}/lineage/openlineage/`。jar 的 `MANIFEST.MF` 带 `Doris-Lineage-Plugin-Api-Version: 1.0`；不要换成去掉这段声明的包，否则当前 FE 会在加载时跳过插件。
 
 ```yaml
 url: http://marquez:5000/api/v1/lineage
