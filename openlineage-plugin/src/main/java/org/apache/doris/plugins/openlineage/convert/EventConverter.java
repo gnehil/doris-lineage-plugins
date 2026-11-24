@@ -15,7 +15,6 @@ import java.time.ZoneOffset;
 import java.time.ZonedDateTime;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -56,10 +55,9 @@ public final class EventConverter {
         String outputName = name(input.output());
         boolean lineageComplete = true;
         OpenLineage ol = new OpenLineage(PRODUCER);
-        Map<String, Set<String>> inputColumns = new LinkedHashMap<>();
         Map<String, List<OpenLineage.InputField>> fieldsByColumn = new LinkedHashMap<>();
         for (ColumnEdge edge : nullToEmpty(input.columns())) {
-            if (edge == null || edge.kind() == Kind.CONSTANT) {
+            if (edge == null) {
                 continue;
             }
             if (edge.sources() == null || edge.sources().isEmpty()) {
@@ -75,7 +73,6 @@ public final class EventConverter {
                     continue;
                 }
                 inputFields.add(inputField(ol, namespace, source.dataset(), source.column(), edge.kind().name(), edge.subtype()));
-                inputColumns.computeIfAbsent(name(source.dataset()), ignored -> new LinkedHashSet<>()).add(source.column());
             }
         }
         List<OpenLineage.InputField> datasetLevel = new ArrayList<>();
@@ -86,7 +83,6 @@ public final class EventConverter {
                 continue;
             }
             datasetLevel.add(inputField(ol, namespace, indirect.dataset(), indirect.column(), Kind.INDIRECT.name(), indirect.subtype()));
-            inputColumns.computeIfAbsent(name(indirect.dataset()), ignored -> new LinkedHashSet<>()).add(indirect.column());
         }
 
         if (!datasetLevel.isEmpty() && !expandDatasetLevel(input, fieldsByColumn, datasetLevel, diagnostics)) {

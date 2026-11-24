@@ -26,8 +26,7 @@ public record LineageInput(
 
     public enum Kind {
         DIRECT,
-        INDIRECT,
-        CONSTANT
+        INDIRECT
     }
 
     public record ColumnEdge(String outputColumn, Kind kind, String subtype, List<ColumnRef> sources) {

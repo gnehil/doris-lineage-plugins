@@ -68,7 +68,6 @@ class EventConverterTest {
         JsonNode total = start.at("/outputs/0/facets/columnLineage/fields/total/inputFields/0");
         assertEquals("INDIRECT", total.at("/transformations/0/type").asText());
         assertEquals("AGGREGATION", total.at("/transformations/0/subtype").asText());
-        assertTrue(start.at("/outputs/0/facets/columnLineage/fields/literal_only").isMissingNode());
         JsonNode datasetLevel = start.at("/outputs/0/facets/columnLineage/dataset");
         assertEquals("internal.sales.customers", datasetLevel.get(0).get("name").asText());
         assertEquals("region", datasetLevel.get(0).get("field").asText());
@@ -223,21 +222,27 @@ class EventConverterTest {
             assertEquals("amount", result.diagnostics().get(0).targetColumn());
             assertEquals("column source is unresolved", result.diagnostics().get(0).reason());
         }
+    }
+
+    @Test
+    void constantProjectionWithoutEdgesKeepsLineageComplete() throws Exception {
         LineageInput constantOnly = new LineageInput(
                 QUERY_ID.toString(),
                 "warehouse-a",
                 SUMMARY,
                 List.of(ORDERS),
-                List.of(new ColumnEdge("literal_only", Kind.CONSTANT, null, List.of())),
                 List.of(),
                 List.of(),
                 List.of(),
+                List.of("literal_only"),
                 1_000L,
                 1L,
                 9_000L);
-        EventConverter.ConversionResult constants = converter.convert(constantOnly);
+        EventConverter.ConversionResult constants = new EventConverter(UUID::randomUUID).convert(constantOnly);
         assertTrue(constants.lineageComplete());
         assertTrue(constants.diagnostics().isEmpty());
+        JsonNode start = JSON.readTree(constants.events().get(0));
+        assertTrue(start.at("/outputs/0/facets/columnLineage").isMissingNode());
     }
 
     @Test
@@ -302,8 +307,7 @@ class EventConverterTest {
                         new ColumnEdge("amount", Kind.DIRECT, "TRANSFORMATION", List.of(
                                 new ColumnRef(ORDERS, "amt"),
                                 new ColumnRef(ORDERS, "qty"))),
-                        new ColumnEdge("total", Kind.INDIRECT, "AGGREGATION", List.of(new ColumnRef(ORDERS, "amt"))),
-                        new ColumnEdge("literal_only", Kind.CONSTANT, null, List.of())),
+                        new ColumnEdge("total", Kind.INDIRECT, "AGGREGATION", List.of(new ColumnRef(ORDERS, "amt")))),
                 List.of(new DatasetIndirect(CUSTOMERS, "region", "FILTER")),
                 List.of(
                         DatasetSchema.ready(ORDERS, List.of(new SchemaField("amt", "DECIMAL(10,2)"), new SchemaField("qty", "INT"))),
