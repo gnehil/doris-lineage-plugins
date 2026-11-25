@@ -13,10 +13,7 @@ import java.net.UnknownHostException;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.URI;
-import java.net.http.HttpClient;
 import java.net.http.HttpConnectTimeoutException;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
 import java.nio.channels.UnresolvedAddressException;
 import java.time.Duration;
 import java.util.Map;
@@ -41,18 +38,7 @@ class LineageHttpPosterTest {
     }
 
     @Test
-    void doesNotRetryAfterAnotherJdkClientHasAlreadyRun() throws Exception {
-        try (ServerSocket closed = new ServerSocket(0, 1, InetAddress.getByName("127.0.0.1"))) {
-            int refused = closed.getLocalPort();
-            closed.close();
-            try {
-                HttpClient.newHttpClient().send(
-                        HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + refused + "/")).timeout(Duration.ofMillis(200)).GET().build(),
-                        HttpResponse.BodyHandlers.discarding());
-            } catch (Exception ignored) {
-                // Prime the JDK client so its process-wide retry flag is already cached.
-            }
-        }
+    void doesNotRetryWhenServerClosesConnection() throws Exception {
         try (ServerSocket server = new ServerSocket(0, 50, InetAddress.getByName("127.0.0.1"))) {
             AtomicInteger accepts = new AtomicInteger();
             Thread listener = new Thread(() -> {

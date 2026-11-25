@@ -13,10 +13,10 @@ mvn test
 可安装的插件包必须对着所部署 FE 的 lib 编译：
 
 ```bash
-mvn -Ddoris.fe.lib=/path/to/fe/lib package
+mvn -Ddoris.fe.lib=/path/to/fe/lib clean verify
 ```
 
-`fe-core` 和 `fe-extension-spi` 只在编译期使用，不会打进插件包。
+`verify` 会检查插件 JAR 中的工厂类和 SPI 注册文件。`fe-core` 和 `fe-extension-spi` 只在编译期使用，不会打进插件包。
 
 ## 安装
 
