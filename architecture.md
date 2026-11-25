@@ -8,26 +8,26 @@ parent: goal-and-requirements
 
 # 架构
 
-仓库是一组彼此独立的 Doris 血缘插件。当前只有 `openlineage-plugin`。它实现 Doris `LineagePlugin`，把收到的 `LineageInfo` 转成一对 OpenLineage 事件，再 HTTP POST 到配置的接收端。产品目标见 `goal-and-requirements`。
+仓库提供两个可独立部署的 Doris 血缘插件。HTTP 和 Kafka 各自实现 Doris 的插件工厂，并通过共享 base 适配 `LineageInfo`、编码事件和管理发送预算。产品目标见 `goal-and-requirements`。
 
 ## 拓扑
 
 ```
 Doris FE
   LineageEventProcessor（异步、可丢弃）
-    → openlineage-plugin.exec(LineageInfo)
+    → HTTP 或 Kafka 插件 exec(LineageInfo)
         → 转换
-        → OpenLineage HTTP
+        → 按配置编码 OpenLineage 或 Doris JSON，经当前 sink 投递
             → 接收端
 ```
 
 FE 负责语义分析和入队。插件不解析 SQL，不连接 FE，不持有自己的持久队列。`exec` 返回前必须结束发送；血缘失败不回滚 DML，这是上游行为。
 
-其他插件形式若出现，是同级模块，不依赖 `openlineage-plugin`，也不被它依赖。在第二个模块出现之前，不设共享库。
+HTTP 和 Kafka 模块依赖 base，两个 sink 之间没有 Maven 依赖。
 
 ## 模块
 
-`openlineage-plugin` 是唯一在本文范围内的模块。责任与边界见 `openlineage-plugin`。
+模块、配置和二进制发布方法见 [README](README.md)，映射契约见 [SPEC](SPEC.md)。
 
 ## 不变量
 
@@ -55,9 +55,9 @@ Run ID：Query ID 已是 UUID 时直接使用。否则用 UUIDv5，输入是无�
 
 `exec` 在 Doris 血缘分发线程上同步发送。该线程是单 worker：慢请求会拖住后续事件，也会拖住同一分发器上的其他血缘插件。插件不另建队列。吞吐取决于接收端响应速度；Doris 自己的队列满了仍可能丢事件，那不是本插件的队列。
 
-单事件发送时限从第一次发起 HTTP 之前的单调时钟起算，缺省 15 秒。转换和序列化不计入这 15 秒，但它们同样占着分发线程。每次请求的超时是总超时，覆盖连接和等待响应，不只是读超时；实际总超时为 `min(配置超时, 剩余发送预算)`，配置超时缺省 5 秒。最多重试 2 次，不保证用满。等待会耗尽剩余预算则结束，不再发送。OpenLineage HTTP 客户端的自动重试必须关闭，发送次数只由这里计数。
+同一次写入的全部事件共用 15 秒发送预算，从首次投递前的单调时钟起算。转换和序列化不计入这 15 秒，但它们同样占着分发线程。每次请求的超时是总超时，覆盖连接和等待响应，不只是读超时；实际总超时为 `min(配置超时, 剩余发送预算)`，配置超时缺省 5 秒。最多重试 2 次，不保证用满。等待会耗尽剩余预算则结束，不再发送。OpenLineage HTTP 客户端的自动重试必须关闭，发送次数只由这里计数。
 
-成功以最终 HTTP 2xx 为准。仅超时、429 和 5xx 重试。其他 4xx 立即丢弃。连接拒绝、DNS 和 TLS 错误不算超时，立即丢弃并记录原因。禁止自动跟随 3xx，把 3xx 记为失败且不重试。超时重试可能重复投递：接收端可能已接收，只是响应没回来。
+HTTP 以最终 2xx 为准。仅超时、429 和 5xx 重试。其他 4xx 立即丢弃。连接拒绝、DNS 和 TLS 错误不算超时，立即丢弃并记录原因。禁止自动跟随 3xx，把 3xx 记为失败且不重试。超时重试可能重复投递：接收端可能已接收，只是响应没回来。
 
 有效 `Retry-After` 超过剩余发送预算时，放弃重试，不截断后提前重试。缺失或无效时，第一次重试前等待 200ms，第二次前等待 500ms；该等待也受剩余预算约束。
 
@@ -71,7 +71,7 @@ Run ID：Query ID 已是 UUID 时直接使用。否则用 UUIDv5，输入是无�
 
 事件按 OpenLineage schema `2-0-2` 校验，`columnLineage` 使用该 schema 中的定义。schema 要求每个 Run 有一个 `START` 和一个终态事件。单条 `COMPLETE` 通过 JSON 校验，不等于满足生命周期。
 
-收到成功回调后，先发 `START`，拿到 HTTP 2xx 后再发 `COMPLETE`。不发 `FAIL`。两条事件共用同一个 Run ID 和同一份数据集与列级血缘，并共用 15 秒发送预算。每个事件最多重试 2 次，预算耗尽则提前结束。
+收到 Doris 成功写入回调后，先发 `START`，等 HTTP 2xx 或 Kafka broker 确认后再发 `COMPLETE`。不发 `FAIL`。两条事件共用同一个 Run ID 和同一份数据集与列级血缘，并共用 15 秒发送预算。HTTP 每个事件最多重试 2 次。Kafka 以 Run ID 为 key，等待元数据、缓冲区和确认都计入同一预算。预算耗尽则停止发送本批后续事件。
 
 `START` 在预算内仍未拿到 2xx：丢弃，不发 `COMPLETE`。`START` 已成功而 `COMPLETE` 失败：只重试 `COMPLETE`，不重发 `START`。
 
@@ -79,6 +79,6 @@ Run ID：Query ID 已是 UUID 时直接使用。否则用 UUIDv5，输入是无�
 
 ## 构建
 
-针对 Doris 4.0.6 构建。Doris API 依赖包括 `fe-core` 和 `fe-extension-spi`：`LineagePlugin`、`LineagePluginFactory` 和 `LineageInfo` 在 `fe-core`，通用插件接口在 `fe-extension-spi`。二者都由 FE 在运行时提供，以 `provided` 依赖编译，不打入插件包。插件自带 OpenLineage、HTTP 等运行依赖，并验证依赖隔离和实际加载。其他 Doris 版本不默认为兼容。
+针对 Doris 4.0.6 构建。Doris API 依赖包括 `fe-core` 和 `fe-extension-spi`：`LineagePlugin`、`LineagePluginFactory` 和 `LineageInfo` 在 `fe-core`，通用插件接口在 `fe-extension-spi`。这两个构件以及适配器编译使用的 FE 签名依赖采用 `provided` 作用域。两个 sink JAR 分别打包 base 和各自运行时依赖。其他 Doris 版本不默认为兼容。
 
-必须实现并注册 `LineagePluginFactory`，通过 ServiceLoader 加载。只实现 `LineagePlugin` 不会被发现。目录加载还要求 shade 后的 jar 声明 `Doris-Lineage-Plugin-Api-Version`，major 与所部署 FE 一致。当前声明见 `openlineage-plugin`。
+必须实现并注册 `LineagePluginFactory`，通过 ServiceLoader 加载。只实现 `LineagePlugin` 不会被发现。目录加载还要求 shade 后的 jar 声明 `Doris-Lineage-Plugin-Api-Version`，major 与所部署 FE 一致。当前声明见 [父 POM](pom.xml)。

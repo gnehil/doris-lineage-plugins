@@ -7,15 +7,15 @@ title: Doris Lineage Plugins
 
 # Doris Lineage Plugins
 
-一个把 Doris 已分析好的血缘事件转成 OpenLineage 并投递出去的插件。
+把 Doris 已分析好的血缘事件编码为 OpenLineage 或 Doris JSON，并通过 HTTP 或 Kafka 投递。
 
 ## 概述
 
-面向运行 Apache Doris 的用户，实现 Doris 的 `LineagePlugin` SPI，并开源发布。Doris 已经从成功执行的 `INSERT INTO … SELECT`、`INSERT OVERWRITE TABLE … SELECT`、`CREATE TABLE AS SELECT` 的分析计划中抽出列级血缘，并把 `LineageInfo` 交给插件。本插件把该事件转成 OpenLineage，以 HTTP POST 发给配置的接收端，供目录展示这条边。它不自己解析 SQL，不连接 Doris FE，也不提供目录界面。
+面向运行 Apache Doris 的用户，实现 Doris 的 `LineagePlugin` SPI，并开源发布。Doris 已经从成功执行的 `INSERT INTO … SELECT`、`INSERT OVERWRITE TABLE … SELECT`、`CREATE TABLE AS SELECT` 的分析计划中抽出列级血缘，并把 `LineageInfo` 交给插件。插件按配置编码并投递到 HTTP 接收端或 Kafka topic，供目录或下游任务消费。它不自己解析 SQL，不连接 Doris FE，也不提供目录界面。
 
 首版针对 Doris 4.0.6 构建并验证。4.0.6 是该框架的起始版本，不代表一个插件包兼容此后所有版本。其他版本按兼容矩阵发布。官方要求按所部署 FE 的准确版本或源码修订编译。
 
-OpenLineage 插件在 `openlineage-plugin` 模块中开发，不占用仓库根目录作为唯一实现。每种插件形式各自一个模块。本文只规定 OpenLineage 这一模块；其他形式既未列入能力，也未被排除。
+HTTP 和 Kafka 分别发布独立插件 JAR。两个 sink 共享 base 模块中的 Doris 适配器、编码器和事件投递顺序。
 
 ## 问题
 
@@ -30,7 +30,7 @@ Doris 的投递是异步且尽力而为：队列满时可能丢弃，不持久�
 
 ## 要完成的事
 
-当插件收到一条受支持写入的 `LineageInfo` 时，我要把它转成身份稳定、列级血缘完整的 OpenLineage 事件，并在有界的时间内 POST 到配置的接收端，以便在现有目录里看到这条边。
+当插件收到受支持写入的 `LineageInfo` 时，保留稳定身份和已解析的列级血缘，并在有界时间内投递到配置的接收端。
 
 ## 关键用户故事
 
@@ -47,7 +47,7 @@ Doris 的投递是异步且尽力而为：队列满时可能丢弃，不持久�
 - 不做 SQL 解析器，也不连接 FE。插件只消费 Doris SPI 传来的 `LineageInfo`。遍历 Doris 已提供的表达式对象以提取来源列，仍在此边界内。
 - 不做目录界面。消费方是已有的 OpenLineage 后端。
 - 不做跨引擎血缘。只实现 Doris 血缘 SPI。Spark、Flink、Hive 不在范围内。
-- 不做通用血缘后端框架。日志、消息总线、Atlas、DataHub 直连发射器都不做。唯一投递方式是 OpenLineage HTTP。运行诊断日志不属于血缘后端。
+- 当前支持 HTTP 和 Kafka 两种投递方式。Atlas、DataHub 等可使用现有接收接口集成。
 - 不保证 Doris 未交给插件的写入进入目录。队列丢弃、不持久化、不重试是上游行为，不在本插件的承诺内。
 - 不把 `INSERT … VALUES` 当作受支持写入。`VALUES` 等由 Doris 排除；插件不为此解析 SQL。
 
@@ -56,7 +56,7 @@ Doris 的投递是异步且尽力而为：队列满时可能丢弃，不持久�
 三条各自可检查：
 
 - **转换正确：** 对收到的三类写入事件，输出通过固定版本的 OpenLineage schema 校验。数据集标识、直接列依赖、数据集级与输出列级的间接依赖及类型符合映射契约。覆盖别名、目标列重排、多输入表达式、聚合、过滤、连接和窗口依赖。常量或无法解析的来源不凭空补边。
-- **链路可用：** 在明确版本的 Doris 4.0.6 和一个 Marquez 版本上，安装、加载、配置插件并执行写入后，能查询并展示预期的表级与列级关系。
+- **链路可用：** 在明确版本的 Doris 4.0.6 和一个 Marquez 版本上，安装、加载、配置插件并执行写入后，能在 Marquez 查询预期的表级与列级关系，并在 Kafka 读到按 Run ID 键控和排序的消息。
 - **失败有界：** 接收端超时或返回错误时，发送在规定时间和资源限制内结束，失败可定位，重试身份保持一致。不无限阻塞，也不无限积压。
 
 ## 能力
@@ -64,9 +64,9 @@ Doris 的投递是异步且尽力而为：队列满时可能丢弃，不持久�
 - 作为 Doris `LineagePlugin` 加载，并在受支持的写入成功后接收 `LineageInfo`。否则 Doris 无法调用本插件。
 - 把该 `LineageInfo` 转成 OpenLineage 事件，覆盖 `INSERT INTO … SELECT`、`INSERT OVERWRITE TABLE … SELECT` 和 `CTAS`。保留直接依赖，以及数据集级、输出列级的间接依赖和类型，映射到 OpenLineage `columnLineage` 的 `DIRECT`、`INDIRECT` 及相应子类型。
 - 数据集、Job、Run 的身份满足：同一对象标识稳定，不同对象不冲突，列级引用与 inputs/outputs 的标识一致。同一张表不因请求落到不同 FE 而生成多个节点。拼接格式见 `architecture`。
-- 每次成功回调补发一对 `START` 和 `COMPLETE`，不发 `FAIL`。顺序、时间和失败处理见 `architecture`。消费端兼容性由链路可用条件验证。
-- 按 OpenLineage 规范，把事件以 HTTP POST 发到配置的接收端。插件不落库、不写消息队列。
-- 接收端 URL、超时和鉴权从插件目录下的配置文件读取。插件用 `PluginContext.getProperties()` 中的 `plugin.path` 定位该文件。Doris 当前不透传这些参数：官方列出的属性只有 `plugin.name` 和 `plugin.path`。不把“由 Doris 透传 URL、超时、鉴权”当作现有能力。若以后改为 Doris 侧透传，须先改造 Doris，不能算作本插件已有的配置来源。
+- OpenLineage 每次成功回调发一对 `START` 和 `COMPLETE`，Doris JSON 发一条 `schemaVersion: 1` 记录。顺序、时间和失败处理见 `architecture`。消费端兼容性由链路可用条件验证。
+- HTTP 将事件 POST 到配置的接收端。Kafka 将事件发到配置的 topic，并等待 broker 确认。
+- 事件格式、超时，以及对应 sink 的地址和鉴权从插件目录下的配置文件读取。插件用 `PluginContext.getProperties()` 中的 `plugin.path` 定位该文件。Doris 当前不透传这些参数：官方列出的属性只有 `plugin.name` 和 `plugin.path`。不把“由 Doris 透传 URL、超时、鉴权”当作现有能力。若以后改为 Doris 侧透传，须先改造 Doris，不能算作本插件已有的配置来源。
 - HTTP 超时、拒绝和服务不可用时的行为有界：有限重试、明确的丢弃时机、可定位的失败记录。次数、超时和退避见 `architecture`。不无限阻塞，也不无限积压。发送失败不重新入队；重试耗尽后记录诊断信息并丢弃，继续处理后续事件。投递为尽力而为，不保证送达或恰好一次。
 - 开源交付物包含安装、加载和配置说明，以及已验证的版本兼容矩阵。
 

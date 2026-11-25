@@ -1,0 +1,8 @@
+cluster: warehouse-a
+format: openlineage
+timeoutMs: 5000
+url: http://marquez:5000/api/v1/lineage
+auth:
+  type: none
+  # type: bearer
+  # token: replace-me
